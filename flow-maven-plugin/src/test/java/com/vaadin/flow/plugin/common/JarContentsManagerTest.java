@@ -270,7 +270,7 @@ public class JarContentsManagerTest {
     }
 
     @Test
-    public void copyFilesFromJar_withBasePath_noExclusions() throws IOException {
+    public void copyFilesFromJar_withBasePath_noExclusions() {
         String basePath = "META-INF/maven/";
         jarContentsManager.copyFilesFromJarTrimmingBasePath(testJar, basePath, testDirectory.getRoot());
 

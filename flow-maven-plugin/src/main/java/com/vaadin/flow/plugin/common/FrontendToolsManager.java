@@ -28,11 +28,6 @@ import java.util.Set;
 import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 
-import org.apache.commons.io.FileUtils;
-import org.apache.commons.io.IOUtils;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
-
 import com.github.eirslett.maven.plugins.frontend.lib.FrontendPluginFactory;
 import com.github.eirslett.maven.plugins.frontend.lib.InstallationException;
 import com.github.eirslett.maven.plugins.frontend.lib.NodeInstaller;
@@ -40,6 +35,10 @@ import com.github.eirslett.maven.plugins.frontend.lib.ProxyConfig;
 import com.github.eirslett.maven.plugins.frontend.lib.TaskRunnerException;
 import com.github.eirslett.maven.plugins.frontend.lib.YarnInstaller;
 import com.google.common.collect.ImmutableMap;
+import org.apache.commons.io.FileUtils;
+import org.apache.commons.io.IOUtils;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 /**
  * Entity to operate frontend tools to transpile files.
@@ -191,8 +190,6 @@ public class FrontendToolsManager {
      * separate directories for ES5 (transpiled) and ES6 (optimized) files.
      * Additionally, creates supplementary files, used by transpilation process.
      *
-     * @param es6SourceDirectory
-     *            the directory to get ES6 files from, not {@code null}
      * @param outputDirectory
      *            the directory to put transpiled files into, created if absent
      * @param skipEs5
@@ -206,9 +203,10 @@ public class FrontendToolsManager {
      *             if output directory creation fails or other
      *             {@link IOException} occurs
      */
-    public Map<String, File> transpileFiles(File es6SourceDirectory,
-            File outputDirectory, boolean skipEs5) {
-        LOGGER.info("Processing frontend files from '{}'", es6SourceDirectory);
+    public Map<String, File> transpileFiles(File outputDirectory,
+            boolean skipEs5) {
+        LOGGER.info("Processing frontend files from '{}'",
+                frontendDataProvider.getEs6SourceDirectory());
         try {
             FileUtils.forceMkdir(Objects.requireNonNull(outputDirectory));
         } catch (IOException e) {
@@ -218,15 +216,18 @@ public class FrontendToolsManager {
                     e);
         }
 
-        if (!Objects.requireNonNull(es6SourceDirectory).isDirectory()) {
+        if (!Objects
+                .requireNonNull(frontendDataProvider.getEs6SourceDirectory())
+                .isDirectory()) {
             throw new IllegalArgumentException(String.format(
                     "es6SourceDirectory '%s' is not a directory or does not exist",
-                    es6SourceDirectory));
+                    frontendDataProvider.getEs6SourceDirectory()));
         }
 
         ImmutableMap.Builder<String, String> gulpFileParameters = new ImmutableMap.Builder<String, String>()
                 .put("{es6_source_directory}",
-                        es6SourceDirectory.getAbsolutePath())
+                        frontendDataProvider.getEs6SourceDirectory()
+                                .getAbsolutePath())
                 .put("{target_directory}", outputDirectory.getAbsolutePath())
                 .put("{es5_configuration_name}", es5OutputDirectoryName)
                 .put("{es6_configuration_name}", es6OutputDirectoryName)

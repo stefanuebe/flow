@@ -22,6 +22,7 @@ import java.util.Map;
 import java.util.Objects;
 
 import com.github.eirslett.maven.plugins.frontend.lib.ProxyConfig;
+
 import com.vaadin.flow.plugin.common.FrontendToolsManager;
 
 /**
@@ -63,8 +64,6 @@ public class TranspilationStep {
     /**
      * Transpiles the files from source directory into the output directory.
      *
-     * @param es6SourceDirectory
-     *            the directory with original ES6 files
      * @param outputDirectory
      *            the directory that will have processed files in
      * @param skipEs5
@@ -74,10 +73,9 @@ public class TranspilationStep {
      * @throws UncheckedIOException
      *             if {@link IOException} occurs during file operations
      */
-    public void transpileFiles(File es6SourceDirectory, File outputDirectory,
-            boolean skipEs5) {
+    public void transpileFiles(File outputDirectory, boolean skipEs5) {
         Map<String, File> transpilationResult = frontendToolsManager
-                .transpileFiles(es6SourceDirectory, outputDirectory, skipEs5);
+                .transpileFiles(outputDirectory, skipEs5);
         if (transpilationResult.isEmpty()) {
             throw new IllegalStateException(
                     "Received no transpilation results from frontend tools");

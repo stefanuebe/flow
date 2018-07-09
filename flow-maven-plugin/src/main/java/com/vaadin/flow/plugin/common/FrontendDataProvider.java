@@ -51,6 +51,8 @@ public class FrontendDataProvider {
     private final boolean shouldMinify;
     private final boolean shouldHash;
 
+    private final File es6SourceDirectory;
+
     private final Map<String, Set<File>> fragments;
     private final Set<File> shellFileImports;
 
@@ -83,6 +85,9 @@ public class FrontendDataProvider {
         this.shouldBundle = shouldBundle;
         this.shouldMinify = shouldMinify;
         this.shouldHash = shouldHash;
+
+        this.es6SourceDirectory = es6SourceDirectory;
+
         fragments = shouldBundle
                 ? resolveFragmentFiles(es6SourceDirectory,
                         fragmentConfigurationFile, userDefinedFragments)
@@ -114,15 +119,24 @@ public class FrontendDataProvider {
         return shouldMinify;
     }
 
-
     /**
-     * Gets the information whether should the plugin rename the output files by adding
-     * a hash fragment.
+     * Gets the information whether should the plugin rename the output files by
+     * adding a hash fragment.
      *
-     * @return {@code true} if renaming of fragments to include a hash part should be performed
+     * @return {@code true} if renaming of fragments to include a hash part
+     *         should be performed
      */
     public boolean shouldHash() {
         return shouldHash;
+    }
+
+    /**
+     * Gets the directory with application ES6 files.
+     * 
+     * @return the directory that contains application ES6 files
+     */
+    public File getEs6SourceDirectory() {
+        return es6SourceDirectory;
     }
 
     /**

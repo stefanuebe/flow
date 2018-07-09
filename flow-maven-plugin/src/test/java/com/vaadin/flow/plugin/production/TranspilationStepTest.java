@@ -1,5 +1,22 @@
 package com.vaadin.flow.plugin.production;
 
+import java.io.File;
+import java.io.IOException;
+import java.io.UncheckedIOException;
+import java.util.Collections;
+import java.util.List;
+
+import com.github.eirslett.maven.plugins.frontend.lib.ProxyConfig;
+import com.google.common.collect.ImmutableMap;
+import org.junit.Rule;
+import org.junit.Test;
+import org.junit.rules.ExpectedException;
+import org.junit.rules.TemporaryFolder;
+
+import com.vaadin.flow.plugin.TestUtils;
+import com.vaadin.flow.plugin.common.FrontendDataProvider;
+import com.vaadin.flow.plugin.common.FrontendToolsManager;
+
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertTrue;
 import static org.junit.Assert.fail;
@@ -9,23 +26,6 @@ import static org.mockito.Mockito.spy;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
-
-import java.io.File;
-import java.io.IOException;
-import java.io.UncheckedIOException;
-import java.util.Collections;
-import java.util.List;
-
-import org.junit.Rule;
-import org.junit.Test;
-import org.junit.rules.ExpectedException;
-import org.junit.rules.TemporaryFolder;
-
-import com.github.eirslett.maven.plugins.frontend.lib.ProxyConfig;
-import com.google.common.collect.ImmutableMap;
-import com.vaadin.flow.plugin.TestUtils;
-import com.vaadin.flow.plugin.common.FrontendDataProvider;
-import com.vaadin.flow.plugin.common.FrontendToolsManager;
 
 /**
  * @author Vaadin Ltd
@@ -69,32 +69,8 @@ public class TranspilationStepTest {
 
         new TranspilationStep(
                 getFrontendToolsManager(temporaryFolder.getRoot()), proxyConfig,
-                nodeVersion, yarnVersion, networkConcurrency).transpileFiles(
-                        temporaryFolder.getRoot(), fileNotDirectory, skipEs5);
-    }
-
-    @Test
-    public void transpileFiles_nonExistingEs6Directory() {
-        File nonExistingFile = new File("desNotExist");
-        exception.expect(IllegalArgumentException.class);
-        exception.expectMessage(nonExistingFile.toString());
-
-        new TranspilationStep(
-                getFrontendToolsManager(temporaryFolder.getRoot()), proxyConfig,
-                nodeVersion, yarnVersion, networkConcurrency).transpileFiles(
-                        nonExistingFile, temporaryFolder.getRoot(), skipEs5);
-    }
-
-    @Test
-    public void transpileFiles_es6DirectoryAsFile() throws IOException {
-        File fileNotDirectory = temporaryFolder.newFile("nope");
-        exception.expect(IllegalArgumentException.class);
-        exception.expectMessage(fileNotDirectory.toString());
-
-        new TranspilationStep(
-                getFrontendToolsManager(temporaryFolder.getRoot()), proxyConfig,
-                nodeVersion, yarnVersion, networkConcurrency).transpileFiles(
-                        fileNotDirectory, temporaryFolder.getRoot(), skipEs5);
+                nodeVersion, yarnVersion, networkConcurrency)
+                        .transpileFiles(fileNotDirectory, skipEs5);
     }
 
     @Test
@@ -103,21 +79,21 @@ public class TranspilationStepTest {
         File es6Directory = new File(outputDirectory, "frontend");
         FrontendToolsManager toolsManagerMock = mock(
                 FrontendToolsManager.class);
-        when(toolsManagerMock.transpileFiles(es6Directory, outputDirectory,
-                skipEs5)).thenReturn(Collections.emptyMap());
+        when(toolsManagerMock.transpileFiles(outputDirectory, skipEs5))
+                .thenReturn(Collections.emptyMap());
 
         try {
             new TranspilationStep(toolsManagerMock, proxyConfig, nodeVersion,
-                    yarnVersion, networkConcurrency).transpileFiles(
-                            es6Directory, outputDirectory, skipEs5);
+                    yarnVersion, networkConcurrency)
+                            .transpileFiles(outputDirectory, skipEs5);
             fail("Frontend manager had returned empty transpilation results, but the step does not fail");
         } catch (IllegalStateException expected) {
             // expected
         }
         verify(toolsManagerMock, times(1)).installFrontendTools(proxyConfig,
                 nodeVersion, yarnVersion, networkConcurrency);
-        verify(toolsManagerMock, times(1)).transpileFiles(es6Directory,
-                outputDirectory, skipEs5);
+        verify(toolsManagerMock, times(1)).transpileFiles(outputDirectory,
+                skipEs5);
     }
 
     @Test
@@ -127,15 +103,14 @@ public class TranspilationStepTest {
         File nonExistingFile = new File("doesNotExist");
         FrontendToolsManager toolsManagerMock = mock(
                 FrontendToolsManager.class);
-        when(toolsManagerMock.transpileFiles(es6Directory, outputDirectory,
-                skipEs5)).thenReturn(
-                        Collections.singletonMap(es6Directory.getName(),
-                                nonExistingFile));
+        when(toolsManagerMock.transpileFiles(outputDirectory, skipEs5))
+                .thenReturn(Collections.singletonMap(es6Directory.getName(),
+                        nonExistingFile));
 
         try {
             new TranspilationStep(toolsManagerMock, proxyConfig, nodeVersion,
-                    yarnVersion, networkConcurrency).transpileFiles(
-                            es6Directory, outputDirectory, skipEs5);
+                    yarnVersion, networkConcurrency)
+                            .transpileFiles(outputDirectory, skipEs5);
             fail(String.format(
                     "Directory '%s' does not contain transpilation results, but the step does not fail",
                     nonExistingFile));
@@ -144,8 +119,8 @@ public class TranspilationStepTest {
         }
         verify(toolsManagerMock, times(1)).installFrontendTools(proxyConfig,
                 nodeVersion, yarnVersion, networkConcurrency);
-        verify(toolsManagerMock, times(1)).transpileFiles(es6Directory,
-                outputDirectory, skipEs5);
+        verify(toolsManagerMock, times(1)).transpileFiles(outputDirectory,
+                skipEs5);
     }
 
     @Test
@@ -169,14 +144,14 @@ public class TranspilationStepTest {
 
         FrontendToolsManager toolsManagerMock = mock(
                 FrontendToolsManager.class);
-        when(toolsManagerMock.transpileFiles(es6SourceDirectory,
-                outputDirectory, skipEs5)).thenReturn(
+        when(toolsManagerMock.transpileFiles(outputDirectory, skipEs5))
+                .thenReturn(
                         ImmutableMap.of("frontend-es5", es5TranspiledDirectory,
                                 "frontend-es6", es6TranspiledDirectory));
 
         new TranspilationStep(toolsManagerMock, proxyConfig, nodeVersion,
-                yarnVersion, networkConcurrency).transpileFiles(
-                        es6SourceDirectory, outputDirectory, skipEs5);
+                yarnVersion, networkConcurrency).transpileFiles(outputDirectory,
+                        skipEs5);
 
         assertEquals("Es6 source files should be left untouched", sourceFiles,
                 TestUtils.listFilesRecursively(es6SourceDirectory));
@@ -192,7 +167,7 @@ public class TranspilationStepTest {
 
         verify(toolsManagerMock, times(1)).installFrontendTools(proxyConfig,
                 nodeVersion, yarnVersion, networkConcurrency);
-        verify(toolsManagerMock, times(1)).transpileFiles(es6SourceDirectory,
-                outputDirectory, skipEs5);
+        verify(toolsManagerMock, times(1)).transpileFiles(outputDirectory,
+                skipEs5);
     }
 }
