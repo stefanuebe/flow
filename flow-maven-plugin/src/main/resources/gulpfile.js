@@ -7,6 +7,7 @@ const shellFile = "{shell_file}";
 const fragmentFiles = [{fragment_files}];
 const es6SourceDirectory = "{es6_source_directory}";
 const targetDirectory = "{target_directory}";
+const workingDirectory = "{working_directory}";
 const es5ConfigurationName = "{es5_configuration_name}";
 const es6ConfigurationName = "{es6_configuration_name}";
 
@@ -38,7 +39,6 @@ const babelTransform = function (contents, options) {
 };
 
 function build(transpileJs, configurationName) {
-    const workingDirectory = __dirname;
     const polymerProperties = {
         root: workingDirectory,
         entrypoint: shellFile,

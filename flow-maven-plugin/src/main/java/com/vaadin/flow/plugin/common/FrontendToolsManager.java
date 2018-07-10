@@ -229,6 +229,7 @@ public class FrontendToolsManager {
                         frontendDataProvider.getEs6SourceDirectory()
                                 .getAbsolutePath())
                 .put("{target_directory}", outputDirectory.getAbsolutePath())
+                .put("{working_directory}", workingDirectory.getAbsolutePath())
                 .put("{es5_configuration_name}", es5OutputDirectoryName)
                 .put("{es6_configuration_name}", es6OutputDirectoryName)
                 .put("{bundle}",
@@ -262,7 +263,6 @@ public class FrontendToolsManager {
             throw new IllegalStateException(
                     "Transpilation with gulp has failed", e);
         }
-
         return transpilationResults;
     }
 
