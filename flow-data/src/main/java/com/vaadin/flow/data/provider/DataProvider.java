@@ -53,8 +53,10 @@ import com.vaadin.flow.shared.Registration;
  * @see #ofCollection(Collection)
  * @see #ofItems(Object...)
  * @see #fromStream(Stream)
- * @see #fromCallbacks(CallbackDataProvider.FetchCallback, CallbackDataProvider.CountCallback)
- * @see #fromFilteringCallbacks(CallbackDataProvider.FetchCallback, CallbackDataProvider.CountCallback)
+ * @see #fromCallbacks(CallbackDataProvider.FetchCallback,
+ *      CallbackDataProvider.CountCallback)
+ * @see #fromFilteringCallbacks(CallbackDataProvider.FetchCallback,
+ *      CallbackDataProvider.CountCallback)
  * @see ListDataProvider
  * @see BackEndDataProvider
  */
@@ -104,6 +106,24 @@ public interface DataProvider<T, F> extends Serializable {
      *            the item to refresh
      */
     void refreshItem(T item);
+
+    /**
+     * Refreshes the given item and all of the children of the item as well.
+     *
+     * @see #refreshItem(Object)
+     *
+     * By default it just does a standard refreshItem, in a hierarchical DataProvider
+     * it is supposed to refresh all of the children as well in case 'refreshChildren'
+     * is true.
+     *
+     * @param item
+     *            the item to refresh
+     * @param refreshChildren
+     *            whether or not to refresh child items
+     */
+    default void refreshItem(T item, boolean refreshChildren) {
+        refreshItem(item);
+    }
 
     /**
      * Refreshes all data based on currently available data in the underlying
@@ -185,7 +205,7 @@ public interface DataProvider<T, F> extends Serializable {
         return new DataProviderWrapper<T, C, F>(this) {
             @Override
             protected F getFilter(Query<T, C> query) {
-                return query.getFilter().map(filterConverter).orElse(null);
+                return FilterUtils.convertFilter(filterConverter, query);
             }
         };
     }
@@ -217,7 +237,8 @@ public interface DataProvider<T, F> extends Serializable {
         return new ConfigurableFilterDataProviderWrapper<T, Q, C, F>(this) {
             @Override
             protected F combineFilters(Q queryFilter, C configuredFilter) {
-                return filterCombiner.apply(queryFilter, configuredFilter);
+                return FilterUtils.combineFilters(filterCombiner, queryFilter,
+                        configuredFilter);
             }
         };
     }
@@ -283,8 +304,8 @@ public interface DataProvider<T, F> extends Serializable {
      * <p>
      * <strong>Using big streams is not recommended, you should instead use a
      * lazy data provider.</strong> See
-     * {@link #fromCallbacks(CallbackDataProvider.FetchCallback, CallbackDataProvider.CountCallback)} or
-     * {@link BackEndDataProvider} for more info.
+     * {@link #fromCallbacks(CallbackDataProvider.FetchCallback, CallbackDataProvider.CountCallback)}
+     * or {@link BackEndDataProvider} for more info.
      *
      * @param <T>
      *            the data item type

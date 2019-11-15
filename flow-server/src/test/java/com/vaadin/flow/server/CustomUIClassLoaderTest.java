@@ -59,6 +59,8 @@ public class CustomUIClassLoaderTest extends TestCase {
 
     private static DeploymentConfiguration createConfigurationMock() {
         Properties properties = new Properties();
+        properties.put(Constants.SERVLET_PARAMETER_COMPATIBILITY_MODE,
+                Boolean.FALSE.toString());
         properties.put(VaadinSession.UI_PARAMETER, MyUI.class.getName());
         return new DefaultDeploymentConfiguration(CustomUIClassLoaderTest.class,
                 properties);
@@ -104,7 +106,7 @@ public class CustomUIClassLoaderTest extends TestCase {
     }
 
     private VaadinSession createStubApplication() {
-        return new AlwaysLockedVaadinSession(null) {
+        return new AlwaysLockedVaadinSession(new MockVaadinServletService()) {
             @Override
             public DeploymentConfiguration getConfiguration() {
                 return createConfigurationMock();

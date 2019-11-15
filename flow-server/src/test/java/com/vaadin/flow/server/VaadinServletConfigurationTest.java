@@ -15,10 +15,10 @@
  */
 package com.vaadin.flow.server;
 
-import java.util.Properties;
-
 import javax.servlet.ServletException;
 import javax.servlet.http.HttpServletRequest;
+
+import java.util.Properties;
 
 import org.easymock.EasyMock;
 import org.junit.Assert;
@@ -45,8 +45,10 @@ public class VaadinServletConfigurationTest {
     @Test
     public void testValuesFromAnnotation() throws ServletException {
         Properties servletInitParams = new Properties();
+        servletInitParams.setProperty(Constants.USE_ORIGINAL_FRONTEND_RESOURCES,
+                Boolean.TRUE.toString());
         servletInitParams.setProperty(
-                Constants.USE_ORIGINAL_FRONTEND_RESOURCES,
+                Constants.SERVLET_PARAMETER_COMPATIBILITY_MODE,
                 Boolean.TRUE.toString());
 
         TestServlet servlet = new TestServlet();
@@ -78,8 +80,10 @@ public class VaadinServletConfigurationTest {
         servletInitParams.setProperty(
                 Constants.SERVLET_PARAMETER_HEARTBEAT_INTERVAL,
                 Integer.toString(expectedInt));
+        servletInitParams.setProperty(Constants.USE_ORIGINAL_FRONTEND_RESOURCES,
+                Boolean.TRUE.toString());
         servletInitParams.setProperty(
-                Constants.USE_ORIGINAL_FRONTEND_RESOURCES,
+                Constants.SERVLET_PARAMETER_COMPATIBILITY_MODE,
                 Boolean.TRUE.toString());
 
         TestServlet servlet = new TestServlet();

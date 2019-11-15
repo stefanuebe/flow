@@ -16,9 +16,9 @@
 
 package com.vaadin.flow.server;
 
-import java.util.Locale;
 import java.util.Properties;
-import java.util.function.Function;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.function.Consumer;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -34,12 +34,21 @@ import com.vaadin.flow.shared.communication.PushMode;
  * @since 1.0
  */
 public class DefaultDeploymentConfiguration
-        extends AbstractDeploymentConfiguration {
-    private static final String SEPARATOR = "\n===========================================================";
+        extends PropertyDeploymentConfiguration {
+    private static final String SEPARATOR = "\n====================================================================";
 
     public static final String NOT_PRODUCTION_MODE_INFO = SEPARATOR
-            + "\nVaadin is running in DEBUG MODE.\nAdd productionMode=true to web.xml "
-            + "to disable debug features." + SEPARATOR;
+            + "\nVaadin is running in DEBUG MODE.\n" +
+            "In order to run your application in production mode and disable debug features, " +
+            "you should enable it by setting the servlet init parameter productionMode to true.\n" +
+            "See https://vaadin.com/docs/v14/flow/production/tutorial-production-mode-basic.html " +
+            "for more information about the production mode." + SEPARATOR;
+
+    public static final String WARNING_COMPATIBILITY_MODE = SEPARATOR
+            + "\nRunning in Vaadin 13 (Flow 1) compatibility mode.\n\n"
+            + "This mode uses webjars/Bower for client side dependency management and HTML imports for dependency loading.\n\n"
+            + "The default mode in Vaadin 14+ (Flow 2+) is based on npm for dependency management and JavaScript modules for dependency inclusion.\n\n"
+            + "See http://vaadin.com/docs for more information." + SEPARATOR;
 
     public static final String WARNING_XSRF_PROTECTION_DISABLED = SEPARATOR
             + "\nWARNING: Cross-site request forgery protection is disabled!"
@@ -54,11 +63,15 @@ public class DefaultDeploymentConfiguration
             + "in web.xml. The permitted values are \"disabled\", \"manual\",\n"
             + "and \"automatic\". The default of \"disabled\" will be used."
             + SEPARATOR;
-
     /**
      * Default value for {@link #getHeartbeatInterval()} = {@value} .
      */
     public static final int DEFAULT_HEARTBEAT_INTERVAL = 300;
+
+    /**
+     * Default value for {@link #getWebComponentDisconnect()} = {@value}.
+     */
+    public static final int DEFAULT_WEB_COMPONENT_DISCONNECT = 300;
 
     /**
      * Default value for {@link #isCloseIdleSessions()} = {@value} .
@@ -73,17 +86,19 @@ public class DefaultDeploymentConfiguration
 
     public static final boolean DEFAULT_SEND_URLS_AS_PARAMETERS = true;
 
-    private final Properties initParameters;
     private boolean productionMode;
+    private boolean compatibilityMode;
     private boolean xsrfProtectionEnabled;
     private int heartbeatInterval;
+    private int webComponentDisconnect;
     private boolean closeIdleSessions;
     private PushMode pushMode;
     private String pushURL;
-    private final Class<?> systemPropertyBaseClass;
     private boolean syncIdCheck;
     private boolean sendUrlsAsParameters;
     private boolean requestTiming;
+
+    private static AtomicBoolean loggWarning = new AtomicBoolean(true);
 
     /**
      * Create a new deployment configuration instance.
@@ -97,102 +112,21 @@ public class DefaultDeploymentConfiguration
      */
     public DefaultDeploymentConfiguration(Class<?> systemPropertyBaseClass,
             Properties initParameters) {
-        this.initParameters = initParameters;
-        this.systemPropertyBaseClass = systemPropertyBaseClass;
+        super(systemPropertyBaseClass, initParameters);
 
-        checkProductionMode();
+        boolean log = loggWarning.getAndSet(false);
+
+        checkProductionMode(log);
+        checkCompatibilityMode(log);
         checkRequestTiming();
-        checkXsrfProtection();
+        checkXsrfProtection(log);
         checkHeartbeatInterval();
+        checkWebComponentDisconnectTimeout();
         checkCloseIdleSessions();
         checkPushMode();
         checkPushURL();
         checkSyncIdCheck();
         checkSendUrlsAsParameters();
-    }
-
-    @Override
-    public <T> T getApplicationOrSystemProperty(String propertyName,
-            T defaultValue, Function<String, T> converter) {
-        // Try system properties
-        String val = getSystemProperty(propertyName);
-        if (val != null) {
-            return converter.apply(val);
-        }
-
-        // Try application properties
-        val = getApplicationProperty(propertyName);
-        if (val != null) {
-            return converter.apply(val);
-        }
-
-        return defaultValue;
-    }
-
-    /**
-     * Gets an system property value.
-     *
-     * @param parameterName
-     *            the Name or the parameter.
-     * @return String value or null if not found
-     */
-    protected String getSystemProperty(String parameterName) {
-        String pkgName;
-        final Package pkg = systemPropertyBaseClass.getPackage();
-        if (pkg != null) {
-            pkgName = pkg.getName();
-        } else {
-            final String className = systemPropertyBaseClass.getName();
-            int index = className.lastIndexOf('.');
-            if (index >= 0) {
-                pkgName = className.substring(0, index);
-            } else {
-                pkgName = null;
-            }
-        }
-        if (pkgName == null) {
-            pkgName = "";
-        } else if (!pkgName.isEmpty()) {
-            pkgName += '.';
-        }
-        String val = System.getProperty(pkgName + parameterName);
-        if (val != null) {
-            return val;
-        }
-
-        // Try lowercased system properties
-        val = System.getProperty(
-                pkgName + parameterName.toLowerCase(Locale.ENGLISH));
-
-        if (val != null) {
-            return val;
-        }
-
-        // version prefixed with just "vaadin."
-        val = System.getProperty("vaadin." + parameterName);
-
-        return val;
-    }
-
-    /**
-     * Gets an application property value.
-     *
-     * @param parameterName
-     *            the Name or the parameter.
-     * @return String value or null if not found
-     */
-    public String getApplicationProperty(String parameterName) {
-
-        String val = initParameters.getProperty(parameterName);
-        if (val != null) {
-            return val;
-        }
-
-        // Try lower case application properties for backward compatibility with
-        // 3.0.2 and earlier
-        val = initParameters.getProperty(parameterName.toLowerCase());
-
-        return val;
     }
 
     /**
@@ -203,6 +137,16 @@ public class DefaultDeploymentConfiguration
     @Override
     public boolean isProductionMode() {
         return productionMode;
+    }
+
+    /**
+     * {@inheritDoc}
+     *
+     * The default is false.
+     */
+    @Override
+    public boolean isBowerMode() {
+        return compatibilityMode;
     }
 
     /**
@@ -234,6 +178,11 @@ public class DefaultDeploymentConfiguration
     @Override
     public int getHeartbeatInterval() {
         return heartbeatInterval;
+    }
+
+    @Override
+    public int getWebComponentDisconnect() {
+        return webComponentDisconnect;
     }
 
     /**
@@ -286,19 +235,49 @@ public class DefaultDeploymentConfiguration
         return pushURL;
     }
 
-    @Override
-    public Properties getInitParameters() {
-        return initParameters;
-    }
-
     /**
      * Log a warning if Vaadin is not running in production mode.
      */
-    private void checkProductionMode() {
+    private void checkProductionMode(boolean loggWarning) {
         productionMode = getBooleanProperty(
                 Constants.SERVLET_PARAMETER_PRODUCTION_MODE, false);
-        if (!productionMode) {
+        if (!productionMode && loggWarning) {
             getLogger().warn(NOT_PRODUCTION_MODE_INFO);
+        }
+    }
+
+    /**
+     * Log a warning if Vaadin is running in compatibility mode. Throw
+     * {@link IllegalStateException} if the mode could not be determined from
+     * parameters.
+     */
+    private void checkCompatibilityMode(boolean loggWarning) {
+        boolean explicitlySet = false;
+        if (getStringProperty(Constants.SERVLET_PARAMETER_BOWER_MODE,
+                null) != null) {
+            compatibilityMode = getBooleanProperty(
+                    Constants.SERVLET_PARAMETER_BOWER_MODE, false);
+            explicitlySet = true;
+        } else if (getStringProperty(
+                Constants.SERVLET_PARAMETER_COMPATIBILITY_MODE, null) != null) {
+            compatibilityMode = getBooleanProperty(
+                    Constants.SERVLET_PARAMETER_COMPATIBILITY_MODE, false);
+            explicitlySet = true;
+        }
+
+        @SuppressWarnings("unchecked")
+        Consumer<CompatibilityModeStatus> consumer = (Consumer<CompatibilityModeStatus>) getInitParameters()
+                .get(DeploymentConfigurationFactory.DEV_MODE_ENABLE_STRATEGY);
+        if (consumer != null) {
+            if (explicitlySet && !compatibilityMode) {
+                consumer.accept(CompatibilityModeStatus.EXPLICITLY_SET_FALSE);
+            } else if (!explicitlySet) {
+                consumer.accept(CompatibilityModeStatus.UNDEFINED);
+            }
+        }
+
+        if (compatibilityMode && loggWarning) {
+            getLogger().warn(WARNING_COMPATIBILITY_MODE);
         }
     }
 
@@ -313,10 +292,10 @@ public class DefaultDeploymentConfiguration
     /**
      * Log a warning if cross-site request forgery protection is disabled.
      */
-    private void checkXsrfProtection() {
+    private void checkXsrfProtection(boolean loggWarning) {
         xsrfProtectionEnabled = !getBooleanProperty(
                 Constants.SERVLET_PARAMETER_DISABLE_XSRF_PROTECTION, false);
-        if (!xsrfProtectionEnabled) {
+        if (!xsrfProtectionEnabled && loggWarning) {
             getLogger().warn(WARNING_XSRF_PROTECTION_DISABLED);
         }
     }
@@ -329,6 +308,18 @@ public class DefaultDeploymentConfiguration
         } catch (NumberFormatException e) {
             getLogger().warn(WARNING_HEARTBEAT_INTERVAL_NOT_NUMERIC);
             heartbeatInterval = DEFAULT_HEARTBEAT_INTERVAL;
+        }
+    }
+
+    private void checkWebComponentDisconnectTimeout() {
+        try {
+            webComponentDisconnect = getApplicationOrSystemProperty(
+                    Constants.SERVLET_PARAMETER_WEB_COMPONENT_DISCONNECT,
+                    DEFAULT_WEB_COMPONENT_DISCONNECT, Integer::parseInt);
+
+        } catch (NumberFormatException e) {
+            getLogger().warn(WARNING_HEARTBEAT_INTERVAL_NOT_NUMERIC);
+            webComponentDisconnect = DEFAULT_WEB_COMPONENT_DISCONNECT;
         }
     }
 

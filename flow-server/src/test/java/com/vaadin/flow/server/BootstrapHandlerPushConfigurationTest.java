@@ -1,18 +1,8 @@
 package com.vaadin.flow.server;
 
-import static java.util.Collections.enumeration;
-import static java.util.Collections.singletonList;
-import static org.hamcrest.Matchers.containsString;
-import static org.hamcrest.Matchers.instanceOf;
-import static org.junit.Assert.assertThat;
-import static org.junit.Assert.fail;
-import static org.mockito.Mockito.mock;
-import static org.mockito.Mockito.when;
+import javax.servlet.http.HttpServletRequest;
 
 import java.io.IOException;
-import java.util.Collections;
-
-import javax.servlet.http.HttpServletRequest;
 
 import org.hamcrest.CoreMatchers;
 import org.junit.After;
@@ -29,6 +19,7 @@ import com.vaadin.flow.component.Tag;
 import com.vaadin.flow.component.UI;
 import com.vaadin.flow.component.page.Push;
 import com.vaadin.flow.router.Route;
+import com.vaadin.flow.router.RouteConfiguration;
 import com.vaadin.flow.router.Router;
 import com.vaadin.flow.router.TestRouteRegistry;
 import com.vaadin.flow.server.MockServletServiceSessionSetup.TestVaadinServletService;
@@ -37,6 +28,15 @@ import com.vaadin.flow.server.communication.PushConnection;
 import com.vaadin.flow.server.communication.PushConnectionFactory;
 import com.vaadin.flow.shared.communication.PushMode;
 import com.vaadin.flow.shared.ui.Transport;
+
+import static java.util.Collections.enumeration;
+import static java.util.Collections.singletonList;
+import static org.hamcrest.Matchers.containsString;
+import static org.hamcrest.Matchers.instanceOf;
+import static org.junit.Assert.assertThat;
+import static org.junit.Assert.fail;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.when;
 
 public class BootstrapHandlerPushConfigurationTest {
 
@@ -50,7 +50,7 @@ public class BootstrapHandlerPushConfigurationTest {
         mocks = new MockServletServiceSessionSetup();
         TestRouteRegistry routeRegistry = new TestRouteRegistry();
 
-        BootstrapHandler.clientEngineFile = "foobar";
+        BootstrapHandler.clientEngineFile = () -> "foobar";
         session = mocks.getSession();
         service = mocks.getService();
         service.setRouteRegistry(routeRegistry);
@@ -65,6 +65,12 @@ public class BootstrapHandlerPushConfigurationTest {
             }
         });
         mocks.setBrowserEs6(false);
+
+        // Update sessionRegistry due to after init change of global registry
+        SessionRouteRegistry sessionRegistry = new SessionRouteRegistry(
+                session);
+        Mockito.when(session.getAttribute(SessionRouteRegistry.class))
+                .thenReturn(sessionRegistry);
 
         testUI = new BootstrapHandlerTest.TestUI();
         testUI.getInternals().setSession(session);
@@ -171,8 +177,12 @@ public class BootstrapHandlerPushConfigurationTest {
             throws InvalidRouteConfigurationException {
         BootstrapHandler bootstrapHandler = new BootstrapHandler();
         VaadinResponse response = mock(VaadinResponse.class);
-        service.getRouteRegistry()
-                .setNavigationTargets(Collections.singleton(annotatedClazz));
+        RouteConfiguration routeConfiguration = RouteConfiguration
+                .forRegistry(service.getRouteRegistry());
+        routeConfiguration.update(() -> {
+            routeConfiguration.getHandledRegistry().clean();
+            routeConfiguration.setAnnotatedRoute(annotatedClazz);
+        });
 
         final BootstrapHandler.BootstrapContext context = bootstrapHandler
                 .createAndInitUI(UI.class, createVaadinRequest(), response,

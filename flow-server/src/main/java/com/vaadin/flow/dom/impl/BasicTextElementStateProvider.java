@@ -20,6 +20,7 @@ import java.util.Collections;
 import com.vaadin.flow.dom.Node;
 import com.vaadin.flow.internal.StateNode;
 import com.vaadin.flow.internal.nodefeature.ComponentMapping;
+import com.vaadin.flow.internal.nodefeature.ReturnChannelMap;
 import com.vaadin.flow.internal.nodefeature.TextNodeMap;
 
 /**
@@ -41,7 +42,7 @@ public class BasicTextElementStateProvider
      * Creates a compatible text state node using the given text.
      *
      * @param text
-     *            the text to use
+     *            the text to use, not <code>null</code>
      * @return a initialized and compatible state node
      */
     public static StateNode createStateNode(String text) {
@@ -49,7 +50,7 @@ public class BasicTextElementStateProvider
 
         StateNode node = new StateNode(
                 Collections.singletonList(TextNodeMap.class),
-                ComponentMapping.class);
+                ComponentMapping.class, ReturnChannelMap.class);
         node.getFeature(TextNodeMap.class).setText(text);
 
         return node;

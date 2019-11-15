@@ -15,20 +15,22 @@
  */
 package com.vaadin.flow.server;
 
+import com.vaadin.flow.function.DeploymentConfiguration;
+import com.vaadin.flow.internal.ResponseWriter;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
 import javax.servlet.http.HttpServletRequest;
 import javax.servlet.http.HttpServletResponse;
 import java.io.IOException;
 import java.io.InputStream;
-import java.io.Serializable;
 import java.net.URL;
 import java.net.URLConnection;
+import java.util.regex.Pattern;
 
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
-
-import com.vaadin.flow.function.DeploymentConfiguration;
-import com.vaadin.flow.internal.ResponseWriter;
-import com.vaadin.flow.shared.ApplicationConstants;
+import static com.vaadin.flow.server.Constants.VAADIN_BUILD_FILES_PATH;
+import static com.vaadin.flow.server.Constants.VAADIN_MAPPING;
+import static com.vaadin.flow.shared.ApplicationConstants.VAADIN_STATIC_FILES_PATH;
 
 /**
  * Handles sending of resources from the WAR root (web content) or
@@ -43,8 +45,12 @@ import com.vaadin.flow.shared.ApplicationConstants;
  * @author Vaadin Ltd
  * @since 1.0
  */
-public class StaticFileServer implements Serializable {
-    private final ResponseWriter responseWriter = new ResponseWriter();
+public class StaticFileServer implements StaticFileHandler {
+    static final String PROPERTY_FIX_INCORRECT_WEBJAR_PATHS = Constants.VAADIN_PREFIX
+            + "fixIncorrectWebjarPaths";
+    private static final Pattern INCORRECT_WEBJAR_PATH_REGEX = Pattern
+            .compile("^/frontend[-\\w/]*/webjars/");
+    private final ResponseWriter responseWriter;
     private final VaadinServletService servletService;
     private DeploymentConfiguration deploymentConfiguration;
 
@@ -56,18 +62,11 @@ public class StaticFileServer implements Serializable {
      */
     public StaticFileServer(VaadinServletService servletService) {
         this.servletService = servletService;
-        this.deploymentConfiguration = servletService
-                .getDeploymentConfiguration();
+        deploymentConfiguration = servletService.getDeploymentConfiguration();
+        responseWriter = new ResponseWriter(deploymentConfiguration);
     }
 
-    /**
-     * Checks if a static resource can be found for the requested path.
-     *
-     * @param request
-     *            the request to check
-     * @return true if a static resource exists and can be sent as a response to
-     *         this request, false otherwise
-     */
+    @Override
     public boolean isStaticResourceRequest(HttpServletRequest request) {
         URL resource;
 
@@ -78,35 +77,43 @@ public class StaticFileServer implements Serializable {
             // least with Jetty
             return false;
         }
-        if (requestFilename.startsWith(
-                "/" + ApplicationConstants.VAADIN_STATIC_FILES_PATH)) {
-            // The path is reserved for internal static resources only
+
+        if (requestFilename.startsWith("/" + VAADIN_STATIC_FILES_PATH) || requestFilename.startsWith("/" + VAADIN_BUILD_FILES_PATH)) {
+            // The path is reserved for internal resources only
             // We rather serve 404 than let it fall through
             return true;
         }
         resource = servletService.getStaticResource(requestFilename);
 
+        if (resource == null && shouldFixIncorrectWebjarPaths()
+                && isIncorrectWebjarPath(requestFilename)) {
+            // Flow issue #4601
+            return true;
+        }
+
         return resource != null;
     }
 
-    /**
-     * Serves a static resource for the requested path if a resource can be
-     * found.
-     * <p>
-     *
-     * @param request
-     *            the request object to read from
-     * @param response
-     *            the response object to write to
-     * @return true if a file was served and the request has been handled, false
-     *         otherwise.
-     * @throws IOException
-     *             if the underlying servlet container reports an exception
-     */
+    @Override
     public boolean serveStaticResource(HttpServletRequest request,
             HttpServletResponse response) throws IOException {
+
         String filenameWithPath = getRequestFilename(request);
-        URL resourceUrl = servletService.getStaticResource(filenameWithPath);
+        URL resourceUrl = null;
+        if (filenameWithPath.startsWith("/" + VAADIN_BUILD_FILES_PATH)
+                && isAllowedVAADINBuildUrl(filenameWithPath)) {
+            resourceUrl = servletService.getClassLoader()
+                    .getResource("META-INF" + filenameWithPath);
+        }
+        if (resourceUrl == null) {
+            resourceUrl = servletService.getStaticResource(filenameWithPath);
+        }
+        if (resourceUrl == null && shouldFixIncorrectWebjarPaths()
+                && isIncorrectWebjarPath(filenameWithPath)) {
+            // Flow issue #4601
+            resourceUrl = servletService.getStaticResource(
+                    fixIncorrectWebjarPath(filenameWithPath));
+        }
 
         if (resourceUrl == null) {
             // Not found in webcontent or in META-INF/resources in some JAR
@@ -129,6 +136,71 @@ public class StaticFileServer implements Serializable {
         }
         responseWriter.writeResponseContents(filenameWithPath, resourceUrl,
                 request, response);
+        return true;
+    }
+
+    // When referring to webjar resources from application stylesheets (loaded
+    // using @StyleSheet) using relative paths, the paths will be different in
+    // development mode and in production mode. The reason is that in production
+    // mode, the CSS is incorporated into the bundle and when this happens,
+    // the relative paths are changed so that they end up pointing to paths like
+    // 'frontend-es6/webjars' instead of just 'webjars'.
+
+    // There is a similar problem when referring to webjar resources from
+    // application stylesheets inside HTML custom styles (loaded using
+    // @HtmlImport). In this case, the paths will also be changed in production.
+    // For example, if the HTML file resides in 'frontend/styles' and refers to
+    // 'webjars/foo', the path will be changed to refer to
+    // 'frontend/styles/webjars/foo', which is incorrect. You could add '../../'
+    // to the path in the HTML file but then it would not work in development
+    // mode.
+
+    // These paths are changed deep inside the Polymer build chain. It was
+    // easier to fix the StaticFileServer to take the incorrect path names
+    // into account than fixing the Polymer build chain to generate correct
+    // paths. Hence, these methods:
+
+    private boolean shouldFixIncorrectWebjarPaths() {
+        return deploymentConfiguration.isProductionMode()
+                && deploymentConfiguration.getBooleanProperty(
+                PROPERTY_FIX_INCORRECT_WEBJAR_PATHS, false);
+    }
+
+    private boolean isIncorrectWebjarPath(
+            String requestFilename) {
+        return INCORRECT_WEBJAR_PATH_REGEX.matcher(requestFilename).lookingAt();
+    }
+
+    private String fixIncorrectWebjarPath(String requestFilename) {
+        return INCORRECT_WEBJAR_PATH_REGEX.matcher(requestFilename)
+                .replaceAll("/webjars/");
+    }
+
+    /**
+     * Check if it is ok to serve the requested file from the classpath.
+     * <p>
+     * ClassLoader is applicable for use when we are in NPM mode and
+     * are serving from the VAADIN/build folder with no folder changes in path.
+     *
+     * @param filenameWithPath requested filename containing path
+     * @return true if we are ok to try serving the file
+     */
+    private boolean isAllowedVAADINBuildUrl(String filenameWithPath) {
+        if (deploymentConfiguration.isCompatibilityMode()) {
+            getLogger().trace("Serving from the classpath in legacy "
+                            + "mode is not accepted. "
+                            + "Letting request for '{}' go to servlet context.",
+                    filenameWithPath);
+            return false;
+        }
+        // Check that we target VAADIN/build and do not have '/../'
+        if (!filenameWithPath.startsWith("/" + VAADIN_BUILD_FILES_PATH)
+                || filenameWithPath.contains("/../")) {
+            getLogger().info("Blocked attempt to access file: {}",
+                    filenameWithPath);
+            return false;
+        }
+
         return true;
     }
 
@@ -214,9 +286,16 @@ public class StaticFileServer implements Serializable {
         // http://localhost:8888/context/servlet/folder/file.js
         // ->
         // /servlet/folder/file.js
-
-        return request.getPathInfo() == null ? request.getServletPath()
-                : request.getServletPath() + request.getPathInfo();
+        //
+        // http://localhost:8888/context/servlet/VAADIN/folder/file.js
+        // ->
+        // /VAADIN/folder/file.js
+        if (request.getPathInfo() == null) {
+            return request.getServletPath();
+        } else if (request.getPathInfo().startsWith("/" + VAADIN_MAPPING)) {
+            return request.getPathInfo();
+        }
+        return request.getServletPath() + request.getPathInfo();
     }
 
     /**

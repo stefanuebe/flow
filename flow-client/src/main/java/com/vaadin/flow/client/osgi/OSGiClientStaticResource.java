@@ -15,14 +15,17 @@
  */
 package com.vaadin.flow.client.osgi;
 
+import org.osgi.service.component.annotations.Component;
+
 import com.vaadin.flow.osgi.support.OsgiVaadinStaticResource;
 
 /**
  * Client resources registration.
  *
  * @author Vaadin Ltd
- *
+ * @since 1.2
  */
+@Component(immediate = true, service = OsgiVaadinStaticResource.class)
 public class OSGiClientStaticResource implements OsgiVaadinStaticResource {
 
     @Override

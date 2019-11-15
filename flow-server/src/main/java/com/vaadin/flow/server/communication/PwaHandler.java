@@ -33,7 +33,6 @@ import com.vaadin.flow.server.PwaRegistry;
 import com.vaadin.flow.server.RequestHandler;
 import com.vaadin.flow.server.VaadinRequest;
 import com.vaadin.flow.server.VaadinResponse;
-import com.vaadin.flow.server.VaadinServletRequest;
 import com.vaadin.flow.server.VaadinSession;
 
 /**
@@ -46,6 +45,8 @@ import com.vaadin.flow.server.VaadinSession;
  * <li>offline fallback page
  * <li>icons
  * </ul>
+ *
+ * @since 1.2
  */
 public class PwaHandler implements RequestHandler {
     private final Map<String, RequestHandler> requestHandlerMap = new HashMap<>();
@@ -124,8 +125,7 @@ public class PwaHandler implements RequestHandler {
     @Override
     public boolean handleRequest(VaadinSession session, VaadinRequest request,
             VaadinResponse response) throws IOException {
-        VaadinServletRequest httpRequest = (VaadinServletRequest) request;
-        String requestUri = httpRequest.getPathInfo();
+        String requestUri = request.getPathInfo();
 
         if (pwaRegistry.getPwaConfiguration().isEnabled()) {
             if (requestHandlerMap.containsKey(requestUri)) {

@@ -36,8 +36,9 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import com.vaadin.flow.plugin.common.ArtifactData;
-import com.vaadin.flow.plugin.common.FlowPluginFileUtils;
-import com.vaadin.flow.plugin.common.JarContentsManager;
+import com.vaadin.flow.server.Constants;
+import com.vaadin.flow.server.frontend.JarContentsManager;
+import com.vaadin.flow.utils.FlowFileUtils;
 
 import elemental.json.Json;
 import elemental.json.JsonObject;
@@ -49,13 +50,11 @@ import elemental.json.JsonObject;
  * @since 1.0.
  */
 public class ProductionModeCopyStep {
-    public static final String NON_WEB_JAR_RESOURCE_PATH = "META-INF/resources/frontend";
-
     static final String WEB_JAR_FILES_BASE = "META-INF/resources/webjars/";
 
-    private static final Logger LOGGER = LoggerFactory.getLogger(ProductionModeCopyStep.class);
+    private static final Logger LOGGER = LoggerFactory
+            .getLogger(ProductionModeCopyStep.class);
     private static final String BOWER_JSON_FILE_NAME = "bower.json";
-    private static final String PACKAGE_JSON_FILE_NAME = "package.json";
     private static final String BOWER_COMPONENTS_DIRECTORY_NAME = "bower_components";
 
     private final JarContentsManager jarContentsManager;
@@ -113,8 +112,7 @@ public class ProductionModeCopyStep {
     }
 
     private void storeWebJarData(ArtifactData webJar) {
-        getWebJarFiles(webJar)
-                .stream()
+        getWebJarFiles(webJar).stream()
                 .map(bowerJsonPath -> new WebJarPackage(webJar,
                         getPackageName(webJar, bowerJsonPath),
                         getPackageDirectory(bowerJsonPath)))
@@ -124,17 +122,19 @@ public class ProductionModeCopyStep {
     }
 
     private List<String> getWebJarFiles(ArtifactData webJar) {
-        List<String> bowerJsonFiles = jarContentsManager
-                .findFiles(webJar.getFileOrDirectory(), WEB_JAR_FILES_BASE,
-                        BOWER_JSON_FILE_NAME);
+        List<String> bowerJsonFiles = jarContentsManager.findFiles(
+                webJar.getFileOrDirectory(), WEB_JAR_FILES_BASE,
+                BOWER_JSON_FILE_NAME);
         if (!bowerJsonFiles.isEmpty()) {
             return bowerJsonFiles;
         }
-        // try to find something here since there are bowergithub WebJars that have no
-        // bower.json but have package.json like https://repo1.maven.org/maven2/org/webjars/bowergithub/webcomponents/shadycss/1.5.0-1/
-        List<String> packageJsonFallback = jarContentsManager
-                .findFiles(webJar.getFileOrDirectory(), WEB_JAR_FILES_BASE,
-                        PACKAGE_JSON_FILE_NAME);
+        // try to find something here since there are bowergithub WebJars that
+        // have no
+        // bower.json but have package.json like
+        // https://repo1.maven.org/maven2/org/webjars/bowergithub/webcomponents/shadycss/1.5.0-1/
+        List<String> packageJsonFallback = jarContentsManager.findFiles(
+                webJar.getFileOrDirectory(), WEB_JAR_FILES_BASE,
+                Constants.PACKAGE_JSON);
         if (packageJsonFallback.isEmpty()) {
             LOGGER.warn(
                     "Found no bower.json or package.json files inside {}. No files will be extracted.",
@@ -147,56 +147,121 @@ public class ProductionModeCopyStep {
         return bowerJsonPath.substring(0, bowerJsonPath.lastIndexOf('/') + 1);
     }
 
-    private String getPackageName(ArtifactData webJar, String nameSourceJarPath) {
+    private String getPackageName(ArtifactData webJar,
+            String nameSourceJarPath) {
         String fileContents;
         try {
-            fileContents = IOUtils.toString(jarContentsManager.getFileContents(webJar.getFileOrDirectory(), nameSourceJarPath), StandardCharsets.UTF_8.displayName());
+            fileContents = IOUtils.toString(
+                    jarContentsManager.getFileContents(
+                            webJar.getFileOrDirectory(), nameSourceJarPath),
+                    StandardCharsets.UTF_8.displayName());
         } catch (IOException e) {
-            throw new UncheckedIOException(String.format("Unable to read file '%s' from webJar '%s'", nameSourceJarPath, webJar.getFileOrDirectory()), e);
+            throw new UncheckedIOException(
+                    String.format("Unable to read file '%s' from webJar '%s'",
+                            nameSourceJarPath, webJar.getFileOrDirectory()),
+                    e);
         }
         JsonObject jsonObject = Json.parse(fileContents);
         if (jsonObject.hasKey("name")) {
             String name = jsonObject.getString("name");
             return name.substring(name.lastIndexOf('/') + 1);
         } else {
-            throw new IllegalStateException(String.format("Incorrect WebJar '%s': file '%s' inside it has no 'name' field", webJar, nameSourceJarPath));
+            throw new IllegalStateException(String.format(
+                    "Incorrect WebJar '%s': file '%s' inside it has no 'name' field",
+                    webJar, nameSourceJarPath));
         }
     }
 
     /**
-     * Copies files from earlier specified jars and {@code frontendWorkingDirectory}, applying exclusions specified to all files.
+     * Copies files from earlier specified jars and
+     * {@code frontendWorkingDirectory}, applying exclusions specified to all
+     * files.
      *
-     * @param outputDirectory                      the directory to copy files into, not {@code null}
-     * @param frontendWorkingDirectory             the directory to copy files from, intended to be current application's directory with frontend files, can be {@code null}
-     * @param commaSeparatedWildcardPathExclusions comma separated wildcard exclusions to exclude files, can be {@code null} if no files are excluded
-     * @throws IllegalStateException if any directory fails to be created via {@link File#mkdirs()}
-     * @throws UncheckedIOException  if any {@link IOException} occurs during other file operations
+     * @param outputDirectory
+     *            the directory to copy files into, not {@code null}
+     * @param frontendWorkingDirectory
+     *            the directory to copy files from, intended to be current
+     *            application's directory with frontend files, can be
+     *            {@code null}
+     * @param commaSeparatedWildcardPathExclusions
+     *            comma separated wildcard exclusions to exclude files, can be
+     *            {@code null} if no files are excluded
+     * @throws IllegalStateException
+     *             if any directory fails to be created via
+     *             {@link File#mkdirs()}
+     * @throws UncheckedIOException
+     *             if any {@link IOException} occurs during other file
+     *             operations
      */
-    public void copyWebApplicationFiles(File outputDirectory, File frontendWorkingDirectory, String commaSeparatedWildcardPathExclusions) {
+    public void copyWebApplicationFiles(File outputDirectory,
+            File frontendWorkingDirectory,
+            String commaSeparatedWildcardPathExclusions) {
         LOGGER.info("Copying web application files to '{}'", outputDirectory);
-        FlowPluginFileUtils.forceMkdir(outputDirectory);
+        FlowFileUtils.forceMkdir(outputDirectory);
 
-        String[] wildcardExclusions = getWildcardExclusions(commaSeparatedWildcardPathExclusions);
+        String[] wildcardExclusions = getWildcardPaths(
+                commaSeparatedWildcardPathExclusions);
 
-        if (frontendWorkingDirectory != null && frontendWorkingDirectory.isDirectory()) {
+        if (frontendWorkingDirectory != null
+                && frontendWorkingDirectory.isDirectory()) {
             try {
-                FileUtils.copyDirectory(frontendWorkingDirectory, outputDirectory, generateFilterWithExclusions(wildcardExclusions));
+                FileUtils.copyDirectory(frontendWorkingDirectory,
+                        outputDirectory,
+                        generateFilterWithExclusions(wildcardExclusions));
             } catch (IOException e) {
-                throw new UncheckedIOException(String.format("Failed to copy contents from `%s` to `%s`", frontendWorkingDirectory, outputDirectory), e);
+                throw new UncheckedIOException(String.format(
+                        "Failed to copy contents from `%s` to `%s`",
+                        frontendWorkingDirectory, outputDirectory), e);
             }
         }
 
         if (!webJarNameToPackage.isEmpty()) {
-            File bowerComponents = new File(outputDirectory, BOWER_COMPONENTS_DIRECTORY_NAME);
+            File bowerComponents = new File(outputDirectory,
+                    BOWER_COMPONENTS_DIRECTORY_NAME);
             webJarNameToPackage.forEach((name, webJarPackage) -> {
                 File webJarDirectory = new File(bowerComponents, name);
-                FlowPluginFileUtils.forceMkdir(webJarDirectory);
-                jarContentsManager.copyFilesFromJarTrimmingBasePath(webJarPackage.getWebJar().getFileOrDirectory(), webJarPackage.getPathToPackage(), webJarDirectory, wildcardExclusions);
+                FlowFileUtils.forceMkdir(webJarDirectory);
+                jarContentsManager.copyFilesFromJarTrimmingBasePath(
+                        webJarPackage.getWebJar().getFileOrDirectory(),
+                        webJarPackage.getPathToPackage(), webJarDirectory,
+                        wildcardExclusions);
             });
         }
 
         for (File notWebJar : nonWebJars) {
-            jarContentsManager.copyFilesFromJarTrimmingBasePath(notWebJar, NON_WEB_JAR_RESOURCE_PATH, outputDirectory, wildcardExclusions);
+            jarContentsManager.copyFilesFromJarTrimmingBasePath(notWebJar,
+                    Constants.COMPATIBILITY_RESOURCES_FRONTEND_DEFAULT,
+                    outputDirectory, wildcardExclusions);
+        }
+    }
+
+    /**
+     * Copies files from earlier specified jars and {@code
+     * frontendWorkingDirectory}, applying exclusions specified to all files.
+     *
+     * @param frontendDirectory
+     *            the directory to copy files into, not {@code null}
+     * @param commaSeparatedWildcardPathInclusions
+     *            comma separated wildcard to include files, can be {@code null}
+     *            if no files are included
+     * @param jsResourcePath
+     *            path to get the js files from
+     * @throws UncheckedIOException
+     *             if any {@link IOException} occurs during other file
+     *             operations
+     */
+    public void copyFrontendJavaScriptFiles(File frontendDirectory,
+            String commaSeparatedWildcardPathInclusions,
+            String jsResourcePath) {
+        LOGGER.info("Copying frontend '.js' files to '{}'", frontendDirectory);
+        FlowFileUtils.forceMkdir(frontendDirectory);
+
+        String[] wildcardInclusions = getWildcardPaths(
+                commaSeparatedWildcardPathInclusions);
+
+        for (File jarFile : nonWebJars) {
+            jarContentsManager.copyIncludedFilesFromJarTrimmingBasePath(jarFile,
+                    jsResourcePath, frontendDirectory, wildcardInclusions);
         }
     }
 
@@ -204,14 +269,18 @@ public class ProductionModeCopyStep {
         if (pathExclusions == null || pathExclusions.length == 0) {
             return null;
         }
-        return pathname -> Stream.of(pathExclusions).noneMatch(exclusionRule -> FilenameUtils.wildcardMatch(pathname.getName(), exclusionRule));
+        return pathname -> Stream.of(pathExclusions)
+                .noneMatch(exclusionRule -> FilenameUtils
+                        .wildcardMatch(pathname.getName(), exclusionRule));
     }
 
-    private String[] getWildcardExclusions(String commaSeparatedWildcardPathExclusions) {
-        if (commaSeparatedWildcardPathExclusions == null || commaSeparatedWildcardPathExclusions.isEmpty()) {
+    private String[] getWildcardPaths(String commaSeparatedWildcardPaths) {
+        if (commaSeparatedWildcardPaths == null
+                || commaSeparatedWildcardPaths.isEmpty()) {
             return new String[0];
         }
         // regex: remove all spaces next to commas
-        return commaSeparatedWildcardPathExclusions.trim().replaceAll("[\\s]*,[\\s]*", ",").split(",");
+        return commaSeparatedWildcardPaths.trim()
+                .replaceAll("[\\s]*,[\\s]*", ",").split(",");
     }
 }

@@ -36,6 +36,7 @@ import com.vaadin.flow.server.VaadinResponse;
 import com.vaadin.flow.server.VaadinService;
 import com.vaadin.flow.server.VaadinSession;
 import com.vaadin.flow.server.communication.ServerRpcHandler.InvalidUIDLSecurityKeyException;
+import com.vaadin.flow.server.communication.ServerRpcHandler.ResynchronizationRequiredException;
 import com.vaadin.flow.shared.JsonConstants;
 
 import elemental.json.JsonException;
@@ -53,8 +54,6 @@ import elemental.json.JsonObject;
  */
 public class UidlRequestHandler extends SynchronizedRequestHandler
         implements SessionExpiredHandler {
-
-    public static final String UIDL_PATH = "UIDL/";
 
     private ServerRpcHandler rpcHandler;
 
@@ -87,20 +86,21 @@ public class UidlRequestHandler extends SynchronizedRequestHandler
 
         try {
             getRpcHandler(session).handleRpc(uI, request.getReader(), request);
-
-            writeUidl(uI, stringWriter);
+            writeUidl(uI, stringWriter, false);
         } catch (JsonException e) {
             getLogger().error("Error writing JSON to response", e);
             // Refresh on client side
             writeRefresh(response);
             return true;
         } catch (InvalidUIDLSecurityKeyException e) {
-            getLogger().warn(
-                    "Invalid security key received from {}",
+            getLogger().warn("Invalid security key received from {}",
                     request.getRemoteHost());
             // Refresh on client side
             writeRefresh(response);
             return true;
+        } catch (ResynchronizationRequiredException e) { // NOSONAR
+            // Resync on the client side
+            writeUidl(uI, stringWriter, true);
         } finally {
             stringWriter.close();
         }
@@ -115,8 +115,9 @@ public class UidlRequestHandler extends SynchronizedRequestHandler
         commitJsonResponse(response, json);
     }
 
-    private static void writeUidl(UI ui, Writer writer) throws IOException {
-        JsonObject uidl = new UidlWriter().createUidl(ui, false);
+    private static void writeUidl(UI ui, Writer writer, boolean resync)
+            throws IOException {
+        JsonObject uidl = new UidlWriter().createUidl(ui, false, resync);
 
         // some dirt to prevent cross site scripting
         String responseString = "for(;;);[" + uidl.toJson() + "]";

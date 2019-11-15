@@ -16,6 +16,38 @@
 
 package com.vaadin.flow.data.binder;
 
+import java.util.HashMap;
+import java.util.Locale;
+import java.util.Map;
+import java.util.Objects;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
+import java.util.stream.Stream;
+
+import org.apache.commons.lang3.StringUtils;
+import org.hamcrest.CoreMatchers;
+import org.junit.After;
+import org.junit.Assert;
+import org.junit.Before;
+import org.junit.Rule;
+import org.junit.Test;
+import org.junit.rules.ExpectedException;
+
+import com.vaadin.flow.component.HasValue;
+import com.vaadin.flow.component.UI;
+import com.vaadin.flow.data.binder.Binder.Binding;
+import com.vaadin.flow.data.binder.Binder.BindingBuilder;
+import com.vaadin.flow.data.binder.testcomponents.TestTextField;
+import com.vaadin.flow.data.converter.Converter;
+import com.vaadin.flow.data.converter.StringToIntegerConverter;
+import com.vaadin.flow.data.validator.IntegerRangeValidator;
+import com.vaadin.flow.data.validator.NotEmptyValidator;
+import com.vaadin.flow.data.validator.StringLengthValidator;
+import com.vaadin.flow.internal.CurrentInstance;
+import com.vaadin.flow.tests.data.bean.Person;
+import com.vaadin.flow.tests.data.bean.Sex;
+
 import static org.hamcrest.MatcherAssert.assertThat;
 import static org.hamcrest.Matchers.containsString;
 import static org.hamcrest.Matchers.isEmptyString;
@@ -27,34 +59,16 @@ import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertSame;
 import static org.junit.Assert.assertTrue;
 
-import java.util.HashMap;
-import java.util.Locale;
-import java.util.Map;
-import java.util.Objects;
-import java.util.concurrent.atomic.AtomicBoolean;
-import java.util.concurrent.atomic.AtomicInteger;
-import java.util.stream.Stream;
-
-import org.apache.commons.lang3.StringUtils;
-import org.junit.Assert;
-import org.junit.Before;
-import org.junit.Test;
-
-import com.vaadin.flow.component.HasValue;
-import com.vaadin.flow.data.binder.Binder.Binding;
-import com.vaadin.flow.data.binder.Binder.BindingBuilder;
-import com.vaadin.flow.data.binder.testcomponents.TestTextField;
-import com.vaadin.flow.data.converter.Converter;
-import com.vaadin.flow.data.converter.StringToIntegerConverter;
-import com.vaadin.flow.data.validator.IntegerRangeValidator;
-import com.vaadin.flow.data.validator.NotEmptyValidator;
-import com.vaadin.flow.data.validator.StringLengthValidator;
-import com.vaadin.flow.tests.data.bean.Person;
-import com.vaadin.flow.tests.data.bean.Sex;
-
 public class BinderTest extends BinderTestBase<Binder<Person>, Person> {
 
     private Map<HasValue<?, ?>, String> componentErrors = new HashMap<>();
+
+    @Rule
+    /*
+     * transient to avoid interfering with serialization tests that capture a
+     * test instance in a closure
+     */
+    public transient ExpectedException exceptionRule = ExpectedException.none();
 
     @Before
     public void setUp() {
@@ -75,6 +89,11 @@ public class BinderTest extends BinderTestBase<Binder<Person>, Person> {
         item = new Person();
         item.setFirstName("Johannes");
         item.setAge(32);
+    }
+
+    @After
+    public void tearDown() {
+        CurrentInstance.clearAll();
     }
 
     @Test
@@ -100,6 +119,23 @@ public class BinderTest extends BinderTestBase<Binder<Person>, Person> {
         binder.setBean(null);
         assertEquals("Name field not empty", "", nameField.getValue());
         assertEquals("Age field not empty", "", ageField.getValue());
+    }
+
+    @Test
+    public void removeInvalidBinding_validateDoesNotThrow() {
+        binder.forField(nameField).bind(Person::getFirstName,
+                Person::setFirstName);
+        Binding<Person, Integer> ageBinding = binder.forField(ageField)
+                .withConverter(new StringToIntegerConverter(""))
+                .bind(Person::getAge, Person::setAge);
+        binder.withValidator(bean -> true, "");
+        binder.setBean(item);
+
+        ageField.setValue("foo");
+
+        binder.removeBinding(ageBinding);
+
+        binder.validate();
     }
 
     @Test
@@ -560,8 +596,7 @@ public class BinderTest extends BinderTestBase<Binder<Person>, Person> {
         textField.setValue("        ");
         String errorMessage = textField.getErrorMessage();
         assertNotNull(errorMessage);
-        assertEquals("Input is required.",
-                componentErrors.get(textField));
+        assertEquals("Input is required.", componentErrors.get(textField));
         // validation is done for all changed bindings once.
         assertEquals(2, invokes.get());
 
@@ -1262,6 +1297,8 @@ public class BinderTest extends BinderTestBase<Binder<Person>, Person> {
 
     @Test
     public void conversionWithLocaleBasedErrorMessage() {
+        TestTextField ageField = new TestTextField();
+
         String fiError = "VIRHE";
         String otherError = "ERROR";
 
@@ -1271,15 +1308,18 @@ public class BinderTest extends BinderTestBase<Binder<Person>, Person> {
 
         binder.forField(ageField).withConverter(converter).bind(Person::getAge,
                 Person::setAge);
-
         binder.setBean(item);
 
-        ageField.setValue("not a number");
+        UI testUI = new UI();
+        UI.setCurrent(testUI);
 
+        testUI.add(ageField);
+
+        ageField.setValue("not a number");
         assertEquals(otherError, ageField.getErrorMessage());
 
-        // No UI present for changing Locale, so need to change the default
-        Locale.setDefault(new Locale("fi"));
+        testUI.setLocale(new Locale("fi", "FI"));
+
         // Re-validate to get the error message with correct locale
         binder.validate();
         assertEquals(fiError, ageField.getErrorMessage());
@@ -1307,5 +1347,79 @@ public class BinderTest extends BinderTestBase<Binder<Person>, Person> {
         beanSet.set(false);
 
         nameField.setValue("Foo");
+    }
+
+    @Test
+    public void nullRejetingField_nullValue_wrappedExceptionMentionsNullRepresentation() {
+        TestTextField field = createNullRejectingFieldWithEmptyValue("");
+
+        Binder<AtomicReference<Integer>> binder = createIntegerConverterBinder(
+                field);
+
+        exceptionRule.expect(IllegalStateException.class);
+        exceptionRule.expectMessage("null representation");
+        exceptionRule.expectCause(CoreMatchers.isA(NullPointerException.class));
+
+        binder.readBean(new AtomicReference<>());
+    }
+
+    @Test
+    public void nullRejetingField_otherRejectedValue_originalExceptionIsThrown() {
+        TestTextField field = createNullRejectingFieldWithEmptyValue("");
+
+        Binder<AtomicReference<Integer>> binder = createIntegerConverterBinder(
+                field);
+
+        exceptionRule.expect(IllegalArgumentException.class);
+        exceptionRule.expectMessage("42");
+
+        binder.readBean(new AtomicReference<>(Integer.valueOf(42)));
+    }
+
+    @Test
+    public void nullAcceptingField_nullValue_originalExceptionIsThrown() {
+        /*
+         * Edge case with a field that throws for null but has null as the empty
+         * value. This is most likely the case if the field doesn't explicitly
+         * reject null values but is instead somehow broken so that any value is
+         * rejected.
+         */
+        TestTextField field = createNullRejectingFieldWithEmptyValue(null);
+
+        Binder<AtomicReference<Integer>> binder = createIntegerConverterBinder(
+                field);
+
+        exceptionRule.expect(NullPointerException.class);
+
+        binder.readBean(new AtomicReference<>(null));
+    }
+
+    private TestTextField createNullRejectingFieldWithEmptyValue(
+            String emptyValue) {
+        return new TestTextField() {
+            @Override
+            public void setValue(String value) {
+                if (value == null) {
+                    throw new NullPointerException("Null value");
+                } else if ("42".equals(value)) {
+                    throw new IllegalArgumentException("42 is not allowed");
+                }
+                super.setValue(value);
+            }
+
+            @Override
+            public String getEmptyValue() {
+                return emptyValue;
+            }
+        };
+    }
+
+    private Binder<AtomicReference<Integer>> createIntegerConverterBinder(
+            TestTextField field) {
+        Binder<AtomicReference<Integer>> binder = new Binder<>();
+        binder.forField(field)
+                .withConverter(new StringToIntegerConverter("Must have number"))
+                .bind(AtomicReference::get, AtomicReference::set);
+        return binder;
     }
 }

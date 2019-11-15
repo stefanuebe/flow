@@ -11,11 +11,13 @@ import com.vaadin.flow.shared.communication.PushMode;
 public class MockDeploymentConfiguration
         extends AbstractDeploymentConfiguration {
 
-    private final String webComponentsPolyfillBase;
-
     private boolean productionMode = false;
+    private boolean enableDevServer = true;
+    private boolean reuseDevServer = true;
+    private boolean compatibilityMode = false;
     private boolean xsrfProtectionEnabled = true;
     private int heartbeatInterval = 300;
+    private int webComponentDisconnect = 300;
     private boolean closeIdleSessions = false;
     private PushMode pushMode = PushMode.DISABLED;
     private String pushURL = "";
@@ -23,18 +25,16 @@ public class MockDeploymentConfiguration
     private Map<String, String> applicationOrSystemProperty = new HashMap<>();
     private boolean syncIdCheckEnabled = true;
     private boolean sendUrlsAsParameters = true;
-
-    public MockDeploymentConfiguration() {
-        this(null);
-    }
-
-    public MockDeploymentConfiguration(String webComponentsPolyfillBase) {
-        this.webComponentsPolyfillBase = webComponentsPolyfillBase;
-    }
+    private boolean brotli = false;
 
     @Override
     public boolean isProductionMode() {
         return productionMode;
+    }
+
+    @Override
+    public boolean isBowerMode() {
+        return compatibilityMode;
     }
 
     @Override
@@ -44,6 +44,24 @@ public class MockDeploymentConfiguration
 
     public void setProductionMode(boolean productionMode) {
         this.productionMode = productionMode;
+    }
+
+    public void setEnableDevServer(boolean enableDevServer) {
+        this.enableDevServer = enableDevServer;
+    }
+
+    @Override
+    public boolean enableDevServer() {
+        return enableDevServer;
+    }
+
+    public void setReuseDevServer(boolean reuseDevServer) {
+        this.reuseDevServer = reuseDevServer;
+    }
+
+    @Override
+    public boolean reuseDevServer() {
+        return reuseDevServer;
     }
 
     @Override
@@ -67,6 +85,11 @@ public class MockDeploymentConfiguration
     @Override
     public int getHeartbeatInterval() {
         return heartbeatInterval;
+    }
+
+    @Override
+    public int getWebComponentDisconnect() {
+        return webComponentDisconnect;
     }
 
     public void setHeartbeatInterval(int heartbeatInterval) {
@@ -127,6 +150,19 @@ public class MockDeploymentConfiguration
     @Override
     public boolean isSendUrlsAsParameters() {
         return sendUrlsAsParameters;
+    }
+
+    @Override
+    public boolean isBrotli() {
+        return brotli;
+    }
+
+    public void setBrotli(boolean brotli) {
+        this.brotli = brotli;
+    }
+
+    public void setCompatibilityMode(boolean compatibility) {
+        compatibilityMode = compatibility;
     }
 
 }

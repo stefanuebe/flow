@@ -21,7 +21,9 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
+import java.util.UUID;
 import java.util.concurrent.Future;
+import java.util.regex.Pattern;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -31,6 +33,8 @@ import com.vaadin.flow.component.page.LoadingIndicatorConfiguration;
 import com.vaadin.flow.component.page.Page;
 import com.vaadin.flow.dom.Element;
 import com.vaadin.flow.function.SerializableConsumer;
+import com.vaadin.flow.function.SerializableRunnable;
+import com.vaadin.flow.i18n.I18NProvider;
 import com.vaadin.flow.internal.CurrentInstance;
 import com.vaadin.flow.internal.ExecutionContext;
 import com.vaadin.flow.internal.StateNode;
@@ -47,6 +51,7 @@ import com.vaadin.flow.router.HasUrlParameter;
 import com.vaadin.flow.router.Location;
 import com.vaadin.flow.router.NavigationTrigger;
 import com.vaadin.flow.router.QueryParameters;
+import com.vaadin.flow.router.RouteConfiguration;
 import com.vaadin.flow.router.Router;
 import com.vaadin.flow.router.RouterLayout;
 import com.vaadin.flow.server.Command;
@@ -57,11 +62,11 @@ import com.vaadin.flow.server.VaadinService;
 import com.vaadin.flow.server.VaadinServlet;
 import com.vaadin.flow.server.VaadinSession;
 import com.vaadin.flow.server.communication.PushConnection;
-import com.vaadin.flow.server.startup.RouteRegistry;
 import com.vaadin.flow.shared.Registration;
 import com.vaadin.flow.theme.NoTheme;
 import com.vaadin.flow.theme.Theme;
 import com.vaadin.flow.theme.ThemeDefinition;
+import com.vaadin.flow.theme.ThemeUtil;
 
 /**
  * The topmost component in any component hierarchy. There is one UI for every
@@ -83,11 +88,15 @@ import com.vaadin.flow.theme.ThemeDefinition;
  *
  * @see #init(VaadinRequest)
  *
+ * @since 1.0
  */
 public class UI extends Component
         implements PollNotifier, HasComponents, RouterLayout {
 
     private static final String NULL_LISTENER = "Listener can not be 'null'";
+
+    private static final Pattern APP_ID_REPLACE_PATTERN = Pattern
+            .compile("-\\d+$");
 
     /**
      * The id of this UI, used to find the server side instance of the UI form
@@ -107,6 +116,14 @@ public class UI extends Component
     private final UIInternals internals = new UIInternals(this);
 
     private final Page page = new Page(this);
+
+    /*
+     * Despite section 6 of RFC 4122, this particular use of UUID *is* adequate
+     * for security capabilities. Type 4 UUIDs contain 122 bits of random data,
+     * and UUID.randomUUID() is defined to use a cryptographically secure random
+     * generator.
+     */
+    private final String csrfToken = UUID.randomUUID().toString();
 
     /**
      * Creates a new empty UI.
@@ -191,7 +208,7 @@ public class UI extends Component
 
         String appId = getSession().getService().getMainDivId(getSession(),
                 request);
-        appId = appId.substring(0, appId.indexOf('-'));
+        appId = APP_ID_REPLACE_PATTERN.matcher(appId).replaceAll("");
         getInternals().setAppId(appId);
 
         // Add any dependencies from the UI class
@@ -369,12 +386,33 @@ public class UI extends Component
      */
     public void accessSynchronously(Command command)
             throws UIDetachedException {
+        // null detach handler -> throw UIDetachEvent
+        accessSynchronously(command, null);
+    }
+
+    private static void handleAccessDetach(SerializableRunnable detachHandler) {
+        if (detachHandler != null) {
+            detachHandler.run();
+        } else {
+            throw new UIDetachedException();
+        }
+    }
+
+    /*
+     * Yes, we are mixing legacy Command with newer SerializableRunnable. This
+     * is done for this internal method since it helps preserve old APIs as-is
+     * while allowing new APIs to use newer conventions.
+     */
+    private void accessSynchronously(Command command,
+            SerializableRunnable detachHandler) {
+
         Map<Class<?>, CurrentInstance> old = null;
 
         VaadinSession session = getSession();
 
         if (session == null) {
-            throw new UIDetachedException();
+            handleAccessDetach(detachHandler);
+            return;
         }
 
         VaadinService.verifyNoOtherSessionLocked(session);
@@ -384,7 +422,8 @@ public class UI extends Component
             if (getSession() == null) {
                 // UI was detached after fetching the session but before we
                 // acquired the lock.
-                throw new UIDetachedException();
+                handleAccessDetach(detachHandler);
+                return;
             }
             old = CurrentInstance.setCurrent(this);
             command.execute();
@@ -441,16 +480,28 @@ public class UI extends Component
      *         cancel the task
      */
     public Future<Void> access(final Command command) {
+        // null detach handler -> throw UIDetachEvent
+        return access(command, null);
+    }
+
+    /*
+     * Yes, we are mixing legacy Command with newer SerializableRunnable. This
+     * is done for this internal method since it helps preserve old APIs as-is
+     * while allowing new APIs to use newer conventions.
+     */
+    private Future<Void> access(Command command,
+            SerializableRunnable detachHandler) {
         VaadinSession session = getSession();
 
         if (session == null) {
-            throw new UIDetachedException();
+            handleAccessDetach(detachHandler);
+            return null;
         }
 
         return session.access(new ErrorHandlingCommand() {
             @Override
             public void execute() {
-                accessSynchronously(command);
+                accessSynchronously(command, detachHandler);
             }
 
             @Override
@@ -468,6 +519,61 @@ public class UI extends Component
                 }
             }
         });
+    }
+
+    /**
+     * Wraps the given access task as a runnable that runs the given task with
+     * this UI locked. The wrapped task may be run synchronously or
+     * asynchronously. If the UI is detached when the returned runnable is run,
+     * the provided detach handler is run instead. If the provided detach
+     * handler is <code>null</code>, the returned runnable may throw an
+     * {@link UIDetachedException}.
+     * <p>
+     * This method can be used to create a callback that can be passed to an
+     * external notifier that isn't aware of the synchronization needed to
+     * update a UI instance.
+     *
+     * @param accessTask
+     *            the task that updates this UI, not <code>null</code>
+     * @param detachHandler
+     *            the callback that will be invoked if the UI is detached, or
+     *            <code>null</code> as described above
+     * @return a runnable that will run either the access task or the detach
+     *         handler, possibly asynchronously
+     */
+    public SerializableRunnable accessLater(SerializableRunnable accessTask,
+            SerializableRunnable detachHandler) {
+        Objects.requireNonNull(accessTask, "Access task cannot be null");
+
+        return () -> access(accessTask::run, detachHandler);
+    }
+
+    /**
+     * Wraps the given access task as a consumer that passes a value to the
+     * given task with this UI locked. The wrapped task may be run synchronously
+     * or asynchronously. If the UI is detached when the returned consumer is
+     * run, the provided detach handler is run instead. If the provided detach
+     * handler is <code>null</code>, the returned runnable may throw an
+     * {@link UIDetachedException}.
+     * <p>
+     * This method can be used to create a callback that can be passed to an
+     * external notifier that isn't aware of the synchronization needed to
+     * update a UI instance.
+     *
+     * @param accessTask
+     *            the task that updates this UI, not <code>null</code>
+     * @param detachHandler
+     *            the callback that will be invoked if the UI is detached, or
+     *            <code>null</code> as described above
+     * @return a consumer that will run either the access task or the detach
+     *         handler, possibly asynchronously
+     */
+    public <T> SerializableConsumer<T> accessLater(
+            SerializableConsumer<T> accessTask,
+            SerializableRunnable detachHandler) {
+        Objects.requireNonNull(accessTask, "Access task cannot be null");
+
+        return value -> access(() -> accessTask.accept(value), detachHandler);
     }
 
     /**
@@ -590,9 +696,22 @@ public class UI extends Component
     }
 
     /**
-     * * Gets the locale for this UI.
+     * Gets the locale for this UI. The default locale is based on the session's
+     * locale, which is in turn determined in different ways depending on
+     * whether a {@link I18NProvider} is available.
+     * <p>
+     * If a i18n provider is available, the locale is determined by selecting
+     * the locale from {@link I18NProvider#getProvidedLocales()} that best
+     * matches the user agent preferences (i.e. the <code>Accept-Language</code>
+     * header). If an exact match is found, then that locale is used. Otherwise,
+     * the matching logic looks for the first provided locale that uses the same
+     * language regardless of the country. If no other match is found, then the
+     * first item from {@link I18NProvider#getProvidedLocales()} is used.
+     * <p>
+     * If no i18n provider is available, then the {@link Locale#getDefault()
+     * default JVM locale} is used as the default locale.
      *
-     * @return the locale in use
+     * @return the locale in use, not <code>null</code>
      */
     @Override
     public Locale getLocale() {
@@ -601,6 +720,10 @@ public class UI extends Component
 
     /**
      * Sets the locale for this UI.
+     * <p>
+     * Note that {@link VaadinSession#setLocale(Locale)} will set the locale for
+     * all UI instances in that session, and might thus override any custom
+     * locale previous set for a specific UI.
      *
      * @param locale
      *            the locale to use, not null
@@ -669,15 +792,12 @@ public class UI extends Component
      * @return the associated ThemeDefinition, or empty if none is defined and
      *         the Lumo class is not in the classpath, or if the NoTheme
      *         annotation is being used.
-     * @see RouteRegistry#getThemeFor(Class, String)
+     * @see ThemeUtil#findThemeForNavigationTarget(UI, Class, String)
      */
     public Optional<ThemeDefinition> getThemeFor(Class<?> navigationTarget,
             String path) {
-        if (getRouter() == null) {
-            return Optional.empty();
-        }
-
-        return getRouter().getRegistry().getThemeFor(navigationTarget, path);
+        return Optional.ofNullable(ThemeUtil.findThemeForNavigationTarget(this,
+                navigationTarget, path));
     }
 
     /**
@@ -686,13 +806,14 @@ public class UI extends Component
      * <p>
      * Besides the navigation to the {@code location} this method also updates
      * the browser location (and page history).
-     * 
+     *
      * @param navigationTarget
      *            navigation target to navigate to
      */
     public void navigate(Class<? extends Component> navigationTarget) {
-        String routeUrl = getRouter().getUrl(navigationTarget);
-        navigate(routeUrl);
+        RouteConfiguration configuration = RouteConfiguration
+                .forRegistry(getRouter().getRegistry());
+        navigate(configuration.getUrl(navigationTarget));
     }
 
     /**
@@ -706,7 +827,7 @@ public class UI extends Component
      * Note! A {@code null} parameter will be handled the same as
      * navigate(navigationTarget) and will throw an exception if HasUrlParameter
      * is not @OptionalParameter or @WildcardParameter.
-     * 
+     *
      * @param navigationTarget
      *            navigation target to navigate to
      * @param parameter
@@ -718,8 +839,9 @@ public class UI extends Component
      */
     public <T, C extends Component & HasUrlParameter<T>> void navigate(
             Class<? extends C> navigationTarget, T parameter) {
-        String routeUrl = getRouter().getUrl(navigationTarget, parameter);
-        navigate(routeUrl);
+        RouteConfiguration configuration = RouteConfiguration
+                .forRegistry(getRouter().getRegistry());
+        navigate(configuration.getUrl(navigationTarget, parameter));
     }
 
     /**
@@ -897,7 +1019,7 @@ public class UI extends Component
     }
 
     /**
-     * Get all registered listener of given navigation handler type.
+     * Get all the registered listeners of the given navigation handler type.
      *
      * @param navigationHandler
      *            navigation handler type to get listeners for
@@ -906,6 +1028,103 @@ public class UI extends Component
      * @return unmodifiable list of registered listeners for navigation handler
      */
     public <E> List<E> getNavigationListeners(Class<E> navigationHandler) {
-        return internals.getNavigationListeners(navigationHandler);
+        return internals.getListeners(navigationHandler);
     }
+
+    /**
+     * Registers a global shortcut tied to the {@code UI} which executes the
+     * given {@link Command} when invoked.
+     * <p>
+     * Returns {@link ShortcutRegistration} which can be used to fluently
+     * configure the shortcut. The shortcut will be present until
+     * {@link ShortcutRegistration#remove()} is called.
+     *
+     * @param command
+     *            code to execute when the shortcut is invoked. Cannot be null
+     * @param key
+     *            primary {@link Key} used to trigger the shortcut. Cannot be
+     *            null
+     * @param keyModifiers
+     *            {@link KeyModifier KeyModifiers} which also need to be pressed
+     *            for the shortcut to trigger
+     * @return {@link ShortcutRegistration} for configuring the shortcut and
+     *         removing
+     * @see #addShortcutListener(ShortcutEventListener, Key, KeyModifier...) for
+     *      registering a listener which receives a {@link ShortcutEvent}
+     * @see Shortcuts for a more generic way to add a shortcut
+     */
+    public ShortcutRegistration addShortcutListener(Command command, Key key,
+            KeyModifier... keyModifiers) {
+        if (command == null) {
+            throw new IllegalArgumentException(
+                    String.format(Shortcuts.NULL, "command"));
+        }
+        if (key == null) {
+            throw new IllegalArgumentException(
+                    String.format(Shortcuts.NULL, "key"));
+        }
+        return new ShortcutRegistration(this, () -> this,
+                event -> command.execute(), key).withModifiers(keyModifiers);
+    }
+
+    /**
+     * Registers a global shortcut tied to the {@code UI} which executes the
+     * given {@link ComponentEventListener} when invoked.
+     * <p>
+     * Returns {@link ShortcutRegistration} which can be used to fluently
+     * configure the shortcut. The shortcut will be present until
+     * {@link ShortcutRegistration#remove()} is called.
+     *
+     * @param listener
+     *            listener to execute when the shortcut is invoked. Receives a
+     *            {@link ShortcutEvent}. Cannot be null
+     * @param key
+     *            primary {@link Key} used to trigger the shortcut
+     * @param keyModifiers
+     *            {@link KeyModifier KeyModifiers} which also need to be pressed
+     *            for the shortcut to trigger
+     * @return {@link ShortcutRegistration} for configuring the shortcut and
+     *         removing
+     * @see Shortcuts for a more generic way to add a shortcut
+     */
+    public ShortcutRegistration addShortcutListener(
+            ShortcutEventListener listener, Key key,
+            KeyModifier... keyModifiers) {
+        if (listener == null) {
+            throw new IllegalArgumentException(
+                    String.format(Shortcuts.NULL, "listener"));
+        }
+        if (key == null) {
+            throw new IllegalArgumentException(
+                    String.format(Shortcuts.NULL, "key"));
+        }
+        return new ShortcutRegistration(this, () -> this, listener, key)
+                .withModifiers(keyModifiers);
+    }
+
+    /**
+     * Gets the drag source of an active HTML5 drag event.
+     * <p>
+     * <em>NOTE: the generic drag and drop feature for Flow is available in
+     * another artifact, {@code flow-dnd} for now.</em>
+     *
+     * @return Extension of the drag source component if the drag event is
+     *         active and originated from this UI, {@literal null} otherwise.
+     * @since 2.0
+     */
+    public Component getActiveDragSourceComponent() {
+        return getInternals().getActiveDragSourceComponent();
+    }
+
+    /**
+     * Gets the CSRF token (aka double submit cookie) that is used to protect
+     * against Cross Site Request Forgery attacks.
+     *
+     * @return the csrf token string
+     * @since 2.0
+     */
+    public String getCsrfToken() {
+        return csrfToken;
+    }
+
 }

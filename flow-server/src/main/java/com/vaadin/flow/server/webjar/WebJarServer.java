@@ -15,15 +15,14 @@
  */
 package com.vaadin.flow.server.webjar;
 
+import javax.servlet.http.HttpServletRequest;
+import javax.servlet.http.HttpServletResponse;
 import java.io.IOException;
 import java.io.Serializable;
 import java.net.URL;
 import java.util.Optional;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
-
-import javax.servlet.http.HttpServletRequest;
-import javax.servlet.http.HttpServletResponse;
 
 import com.vaadin.flow.function.DeploymentConfiguration;
 import com.vaadin.flow.internal.ResponseWriter;
@@ -42,7 +41,7 @@ import com.vaadin.flow.shared.ApplicationConstants;
  * @since 1.0.
  */
 public class WebJarServer implements Serializable {
-    private final ResponseWriter responseWriter = new ResponseWriter();
+    private final ResponseWriter responseWriter;
 
     private final String prefix;
     private final Pattern urlPattern;
@@ -57,6 +56,8 @@ public class WebJarServer implements Serializable {
      */
     public WebJarServer(DeploymentConfiguration deploymentConfiguration) {
         assert deploymentConfiguration != null;
+
+        responseWriter = new ResponseWriter(deploymentConfiguration);
 
         String frontendPrefix = deploymentConfiguration
                 .getDevelopmentFrontendPrefix();
@@ -94,7 +95,9 @@ public class WebJarServer implements Serializable {
      */
     public boolean tryServeWebJarResource(HttpServletRequest request,
             HttpServletResponse response) throws IOException {
-        String pathInContext = request.getServletPath() + request.getPathInfo();
+        String pathInContext = request.getPathInfo() == null
+                ? request.getServletPath()
+                : request.getServletPath() + request.getPathInfo();
 
         String webJarPath = getWebJarPath(pathInContext);
         if (webJarPath == null) {

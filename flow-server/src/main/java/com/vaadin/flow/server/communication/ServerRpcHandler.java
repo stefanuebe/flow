@@ -35,6 +35,7 @@ import org.slf4j.LoggerFactory;
 
 import com.vaadin.flow.component.UI;
 import com.vaadin.flow.internal.MessageDigestUtil;
+import com.vaadin.flow.internal.StateNode;
 import com.vaadin.flow.server.ErrorEvent;
 import com.vaadin.flow.server.VaadinRequest;
 import com.vaadin.flow.server.VaadinService;
@@ -60,14 +61,6 @@ import elemental.json.impl.JsonUtil;
  * @since 1.0
  */
 public class ServerRpcHandler implements Serializable {
-
-    public static final String WIDGETSET_MISMATCH_INFO = "\n"
-            + "=================================================================\n"
-            + "The widgetset in use does not seem to be built for the Vaadin\n"
-            + "version in use. This might cause strange problems - a\n"
-            + "recompile/deploy is strongly recommended.\n"
-            + " Vaadin version: %s\n" + " Widgetset version: %s\n"
-            + "=================================================================";
 
     /**
      * A data transfer object representing an RPC request sent by the client
@@ -217,6 +210,20 @@ public class ServerRpcHandler implements Serializable {
     }
 
     /**
+     * Exception thrown then the client side resynchronization is required.
+     */
+    public static class ResynchronizationRequiredException
+            extends RuntimeException {
+
+        /**
+         * Default constructor for the exception.
+         */
+        public ResynchronizationRequiredException() {
+            super();
+        }
+    }
+
+    /**
      * Reads JSON containing zero or more serialized RPC calls (including legacy
      * variable changes) and executes the calls.
      *
@@ -247,8 +254,7 @@ public class ServerRpcHandler implements Serializable {
 
         // Security: double cookie submission pattern unless disabled by
         // property
-        if (!VaadinService.isCsrfTokenValid(ui.getSession(),
-                rpcRequest.getCsrfToken())) {
+        if (!VaadinService.isCsrfTokenValid(ui, rpcRequest.getCsrfToken())) {
             throw new InvalidUIDLSecurityKeyException();
         }
 
@@ -311,10 +317,17 @@ public class ServerRpcHandler implements Serializable {
         }
 
         if (rpcRequest.isResynchronize()) {
-            // FIXME Implement
-            throw new UnsupportedOperationException("FIXME: Implement resync");
+            getLogger().warn("Resynchronizing UI by client's request. Under "
+                    + "normal operations this should not happen and may "
+                    + "indicate a bug in Vaadin platform. If you see this "
+                    + "message regularly please open a bug report at "
+                    + "https://github.com/vaadin/flow/issues");
+            ui.getInternals().getStateTree().getRootNode()
+                    .visitNodeTree(StateNode::markAsDirty);
+            // Signal by exception instead of return value to keep the method
+            // signature for source and binary compatibility
+            throw new ResynchronizationRequiredException();
         }
-
     }
 
     /**
@@ -364,8 +377,16 @@ public class ServerRpcHandler implements Serializable {
             }
         }
 
-        pendingChangeEvents.forEach(Runnable::run);
+        pendingChangeEvents.forEach(runnable -> runMapSyncTask(ui, runnable));
         data.forEach(json -> handleInvocationData(ui, json));
+    }
+
+    private void runMapSyncTask(UI ui, Runnable runnable) {
+        try {
+            runnable.run();
+        } catch (Throwable throwable) {
+            ui.getSession().getErrorHandler().error(new ErrorEvent(throwable));
+        }
     }
 
     private void handleInvocationData(UI ui, JsonObject invocationJson) {
@@ -380,8 +401,8 @@ public class ServerRpcHandler implements Serializable {
             assert !handle.isPresent() : "RPC handler "
                     + handler.getClass().getName()
                     + " returned a Runnable even though it shouldn't";
-        } catch (Exception e) {
-            ui.getSession().getErrorHandler().error(new ErrorEvent(e));
+        } catch (Throwable throwable) {
+            ui.getSession().getErrorHandler().error(new ErrorEvent(throwable));
         }
     }
 
@@ -430,6 +451,7 @@ public class ServerRpcHandler implements Serializable {
             list.add(new PublishedServerEventHandlerRpcHandler());
             list.add(new AttachExistingElementRpcHandler());
             list.add(new AttachTemplateChildRpcHandler());
+            list.add(new ReturnChannelHandler());
             return list;
         }
     }

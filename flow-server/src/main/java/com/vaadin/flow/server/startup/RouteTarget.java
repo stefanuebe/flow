@@ -16,6 +16,8 @@
 package com.vaadin.flow.server.startup;
 
 import java.io.Serializable;
+import java.util.ArrayList;
+import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -24,34 +26,61 @@ import com.vaadin.flow.component.Component;
 import com.vaadin.flow.router.HasUrlParameter;
 import com.vaadin.flow.router.OptionalParameter;
 import com.vaadin.flow.router.ParameterDeserializer;
+import com.vaadin.flow.router.RouterLayout;
 import com.vaadin.flow.router.WildcardParameter;
+import com.vaadin.flow.server.AmbiguousRouteConfigurationException;
 import com.vaadin.flow.server.InvalidRouteConfigurationException;
-import com.vaadin.flow.theme.ThemeDefinition;
 
 /**
  * Route target holder that handles getting the correct type of has parameter
  * target.
+ *
+ * @since 1.0
  */
 public class RouteTarget implements Serializable {
     private Class<? extends Component> normal;
     private Class<? extends Component> parameter;
     private Class<? extends Component> optionalParameter;
     private Class<? extends Component> wildCardParameter;
-    private Map<Class<?>, ThemeDefinition> routeThemes;
+
+    private final boolean mutable;
+
+    private final Map<Class<? extends Component>, List<Class<? extends RouterLayout>>> parentLayouts = new HashMap<>(
+            0);
+
+    private RouteTarget(boolean mutable) {
+        this.mutable = mutable;
+    }
 
     /**
-     * Create a new Route target holder.
+     * Create a new Route target holder with the given target registered.
+     * <p>
+     * Note! This will create a mutable RouteTarget by default.
      *
      * @param target
      *            navigation target
-     *
      * @throws InvalidRouteConfigurationException
      *             exception for miss configured routes where navigation targets
      *             can not be clearly selected
      */
-    public RouteTarget(Class<? extends Component> target)
-            throws InvalidRouteConfigurationException {
-        addRoute(target);
+    public RouteTarget(Class<? extends Component> target) {
+        this(target, true);
+    }
+
+    /**
+     * Create a new Route target holder with the given target registered.
+     *
+     * @param target
+     *            navigation target
+     * @param mutable
+     *            if this should be mutable
+     * @throws InvalidRouteConfigurationException
+     *             exception for miss configured routes where navigation targets
+     *             can not be clearly selected
+     */
+    public RouteTarget(Class<? extends Component> target, boolean mutable) {
+        this.mutable = mutable;
+        addTargetByType(target);
     }
 
     /**
@@ -66,7 +95,12 @@ public class RouteTarget implements Serializable {
      *             exception for miss configured routes where navigation targets
      *             can not be clearly selected
      */
-    public void addRoute(Class<? extends Component> target)
+    public void addRoute(Class<? extends Component> target) {
+        throwIfImmutable();
+        addTargetByType(target);
+    }
+
+    private void addTargetByType(Class<? extends Component> target)
             throws InvalidRouteConfigurationException {
         if (!HasUrlParameter.class.isAssignableFrom(target)
                 && !isAnnotatedParameter(target)) {
@@ -91,46 +125,49 @@ public class RouteTarget implements Serializable {
     private void validateParameter(Class<? extends Component> target)
             throws InvalidRouteConfigurationException {
         if (parameter != null) {
-            throw new InvalidRouteConfigurationException(String.format(
+            throw new AmbiguousRouteConfigurationException(String.format(
                     "Navigation targets must have unique routes, found navigation targets '%s' and '%s' with parameter have the same route.",
-                    parameter.getName(), target.getName()));
+                    parameter.getName(), target.getName()), parameter);
         }
     }
 
     private void validateWildcard(Class<? extends Component> target)
             throws InvalidRouteConfigurationException {
         if (wildCardParameter != null) {
-            throw new InvalidRouteConfigurationException(String.format(
+            throw new AmbiguousRouteConfigurationException(String.format(
                     "Navigation targets must have unique routes, found navigation targets '%s' and '%s' with wildcard parameter have the same route.",
-                    wildCardParameter.getName(), target.getName()));
+                    wildCardParameter.getName(), target.getName()),
+                    wildCardParameter);
         }
     }
 
     private void validateOptionalParameter(Class<? extends Component> target)
             throws InvalidRouteConfigurationException {
         if (normal != null) {
-            throw new InvalidRouteConfigurationException(String.format(
+            throw new AmbiguousRouteConfigurationException(String.format(
                     "Navigation targets '%s' and '%s' have the same path and '%s' has an OptionalParameter that will never be used as optional.",
-                    normal.getName(), target.getName(), target.getName()));
+                    normal.getName(), target.getName(), target.getName()),
+                    normal);
         } else if (optionalParameter != null) {
             String message = String.format(
                     "Navigation targets must have unique routes, found navigation targets '%s' and '%s' with parameter have the same route.",
                     optionalParameter.getName(), target.getName());
-            throw new InvalidRouteConfigurationException(message);
+            throw new AmbiguousRouteConfigurationException(message,
+                    optionalParameter);
         }
     }
 
     private void validateNormalTarget(Class<? extends Component> target)
             throws InvalidRouteConfigurationException {
         if (normal != null) {
-            throw new InvalidRouteConfigurationException(String.format(
+            throw new AmbiguousRouteConfigurationException(String.format(
                     "Navigation targets must have unique routes, found navigation targets '%s' and '%s' with the same route.",
-                    normal.getName(), target.getName()));
+                    normal.getName(), target.getName()), normal);
         } else if (optionalParameter != null) {
-            throw new InvalidRouteConfigurationException(String.format(
+            throw new AmbiguousRouteConfigurationException(String.format(
                     "Navigation targets '%s' and '%s' have the same path and '%s' has an OptionalParameter that will never be used as optional.",
                     target.getName(), optionalParameter.getName(),
-                    optionalParameter.getName()));
+                    optionalParameter.getName()), optionalParameter);
         }
     }
 
@@ -162,32 +199,133 @@ public class RouteTarget implements Serializable {
     }
 
     /**
-     * Sets the theme used by this RouteTarget for a given navigation target.
-     * 
-     * @param target
-     *            navigation target
-     * @param theme
-     *            themeDefinition to be used when the navigation target is used
+     * Create a copy of this RouteTarget.
+     *
+     * @param mutable
+     *            if created copy is mutable or not
+     * @return copy of this RouteTarget
      */
-    public void setThemeFor(Class<?> target, ThemeDefinition theme) {
-        if (routeThemes == null) {
-            routeThemes = new HashMap<>();
-        }
-        routeThemes.put(target, theme);
+    public RouteTarget copy(boolean mutable) {
+        RouteTarget copy = new RouteTarget(mutable);
+        copy.normal = normal;
+        copy.parameter = parameter;
+        copy.optionalParameter = optionalParameter;
+        copy.wildCardParameter = wildCardParameter;
+        parentLayouts.keySet().forEach(
+                key -> copy.parentLayouts.put(key, parentLayouts.get(key)));
+        return copy;
     }
 
     /**
-     * Gets the theme that should be used for the given navigation target.
-     * 
-     * @param target
-     *            navigation target
-     * @return theme class to be used when the navigation target is used, or
-     *         <code>null</code> if no theme was set for it
+     * Remove target route from this RouteTarget. This will also clear the
+     * parent layout chain for the target.
+     *
+     * @param targetRoute
+     *            route to remove
      */
-    public ThemeDefinition getThemeFor(Class<?> target) {
-        if (routeThemes == null) {
-            return null;
+    public void remove(Class<? extends Component> targetRoute) {
+        throwIfImmutable();
+        if (targetRoute.equals(normal)) {
+            normal = null;
+        } else if (targetRoute.equals(parameter)) {
+            parameter = null;
+        } else if (targetRoute.equals(optionalParameter)) {
+            optionalParameter = null;
+        } else if (targetRoute.equals(wildCardParameter)) {
+            wildCardParameter = null;
         }
-        return routeThemes.get(target);
+
+        parentLayouts.remove(targetRoute);
+    }
+
+    /**
+     * Check if navigation target is present in current target.
+     *
+     * @param target
+     *            navigation target to check for
+     * @return true if navigation target is found in some position
+     */
+    public boolean containsTarget(Class<? extends Component> target) {
+        return getRoutes().contains(target);
+    }
+
+    /**
+     * Check if this RouteTarget is empty. This means that it no longer contains
+     * any route classes.
+     *
+     * @return true is no targets are found
+     */
+    public boolean isEmpty() {
+        return normal == null && parameter == null && optionalParameter == null
+                && wildCardParameter == null;
+    }
+
+    /**
+     * Get all registered targets for this routeTarget as a iterable.
+     *
+     * @return all registered route classes
+     */
+    public List<Class<? extends Component>> getRoutes() {
+        List<Class<? extends Component>> registrations = new ArrayList<>(4);
+        if (normal != null) {
+            registrations.add(normal);
+        }
+        if (parameter != null) {
+            registrations.add(parameter);
+        }
+        if (optionalParameter != null) {
+            registrations.add(optionalParameter);
+        }
+        if (wildCardParameter != null) {
+            registrations.add(wildCardParameter);
+        }
+
+        return registrations;
+    }
+
+    /**
+     * Set the parent layout chain for target component. This will override any
+     * existing parent layout chain for the target.
+     * <p>
+     * Note! if adding parents for a non registered target an
+     * IllegalArgumentException will be thrown.
+     *
+     * @param target
+     *            target to add chain for
+     * @param parents
+     *            parent layout chain
+     */
+    public void setParentLayouts(Class<? extends Component> target,
+            List<Class<? extends RouterLayout>> parents) {
+        throwIfImmutable();
+        if (!containsTarget(target)) {
+            throw new IllegalArgumentException(
+                    "Tried to add parent layouts for a non existing target "
+                            + target.getName());
+        }
+        parentLayouts.put(target,
+                Collections.unmodifiableList(new ArrayList<>(parents)));
+    }
+
+    /**
+     * Get the parent layout chain defined for the given target.
+     *
+     * @param target
+     *            target to get parent layout chain for
+     * @return parent layout chain
+     */
+    public List<Class<? extends RouterLayout>> getParentLayouts(
+            Class<? extends Component> target) {
+        if (!parentLayouts.containsKey(target)) {
+            return Collections.emptyList();
+        }
+        return parentLayouts.get(target);
+    }
+
+    private void throwIfImmutable() {
+        if (!mutable) {
+            throw new IllegalStateException(
+                    "Tried to mutate immutable configuration.");
+        }
     }
 }

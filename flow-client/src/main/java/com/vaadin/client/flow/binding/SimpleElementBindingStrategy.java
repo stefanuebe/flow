@@ -19,8 +19,11 @@ import java.util.Objects;
 import java.util.function.Consumer;
 import java.util.function.Supplier;
 
+import jsinterop.annotations.JsFunction;
+
 import com.google.gwt.core.client.JavaScriptObject;
 import com.google.gwt.core.client.Scheduler;
+
 import com.vaadin.client.Command;
 import com.vaadin.client.Console;
 import com.vaadin.client.ExistingElementMap;
@@ -62,7 +65,6 @@ import elemental.json.JsonArray;
 import elemental.json.JsonObject;
 import elemental.json.JsonType;
 import elemental.json.JsonValue;
-import jsinterop.annotations.JsFunction;
 
 /**
  * Binding strategy for a simple (not template) {@link Element} node.
@@ -257,8 +259,14 @@ public class SimpleElementBindingStrategy implements BindingStrategy<Element> {
          * command execution
          */
         Reactive.addPostFlushListener(
-                () -> Scheduler.get().scheduleDeferred(() -> stateNode
-                        .getNodeData(InitialPropertyUpdate.class).execute()));
+                () -> Scheduler.get().scheduleDeferred(() -> {
+                    InitialPropertyUpdate propertyUpdate = stateNode
+                            .getNodeData(InitialPropertyUpdate.class);
+                    // cleared if handlePropertiesChanged has already happened
+                    if (propertyUpdate != null) {
+                        propertyUpdate.execute();
+                    }
+                }));
     }
 
     private native void bindPolymerModelProperties(StateNode node,
@@ -1153,16 +1161,21 @@ public class SimpleElementBindingStrategy implements BindingStrategy<Element> {
 
     private EventRemover bindDomEventListeners(BindingContext context) {
         NodeMap elementListeners = getDomEventListenerMap(context.node);
-        elementListeners.forEachProperty((property,
-                name) -> bindEventHandlerProperty(property, context));
+        elementListeners.forEachProperty((property, name) -> {
+            Computation computation = bindEventHandlerProperty(property,
+                    context);
+
+            // Run eagerly to add initial listeners before element is attached
+            computation.recompute();
+        });
 
         return elementListeners.addPropertyAddListener(
                 event -> bindEventHandlerProperty(event.getProperty(),
                         context));
     }
 
-    private void bindEventHandlerProperty(MapProperty eventHandlerProperty,
-            BindingContext context) {
+    private Computation bindEventHandlerProperty(
+            MapProperty eventHandlerProperty, BindingContext context) {
         String name = eventHandlerProperty.getName();
         assert !context.listenerBindings.has(name);
 
@@ -1181,6 +1194,7 @@ public class SimpleElementBindingStrategy implements BindingStrategy<Element> {
 
         context.listenerBindings.set(name, computation);
 
+        return computation;
     }
 
     private void removeEventHandler(String eventType, BindingContext context) {
@@ -1195,8 +1209,7 @@ public class SimpleElementBindingStrategy implements BindingStrategy<Element> {
         assert !context.listenerRemovers.has(eventType);
 
         EventRemover remover = context.htmlNode.addEventListener(eventType,
-                event -> handleDomEvent(event, context.htmlNode, context.node),
-                false);
+                event -> handleDomEvent(event, context), false);
 
         context.listenerRemovers.set(eventType, remover);
     }
@@ -1205,8 +1218,13 @@ public class SimpleElementBindingStrategy implements BindingStrategy<Element> {
         return node.getMap(NodeFeatures.ELEMENT_LISTENERS);
     }
 
-    private void handleDomEvent(Event event, Node element, StateNode node) {
+    private void handleDomEvent(Event event, BindingContext context) {
+        assert context != null;
+
+        Node element = context.htmlNode;
+        StateNode node = context.node;
         assert element instanceof Element : "Cannot handle DOM event for a Node";
+
         String type = event.getType();
 
         NodeMap listenerMap = getDomEventListenerMap(node);
@@ -1223,28 +1241,44 @@ public class SimpleElementBindingStrategy implements BindingStrategy<Element> {
         String[] expressions = expressionSettings.keys();
 
         JsonObject eventData;
+        JsSet<String> synchronizeProperties = JsCollections.set();
+
         if (expressions.length == 0) {
             eventData = null;
         } else {
             eventData = Json.createObject();
 
             for (String expressionString : expressions) {
-                EventExpression expression = getOrCreateExpression(
-                        expressionString);
+                if (expressionString
+                        .startsWith(JsonConstants.SYNCHRONIZE_PROPERTY_TOKEN)) {
+                    String property = expressionString.substring(
+                            JsonConstants.SYNCHRONIZE_PROPERTY_TOKEN.length());
+                    synchronizeProperties.add(property);
+                } else {
+                    EventExpression expression = getOrCreateExpression(
+                            expressionString);
 
-                JsonValue expressionValue = expression.evaluate(event,
-                        (Element) element);
+                    JsonValue expressionValue = expression.evaluate(event,
+                            (Element) element);
 
-                eventData.put(expressionString, expressionValue);
+                    eventData.put(expressionString, expressionValue);
+                }
             }
         }
 
-        boolean sendNow = resolveFilters(element, node, type,
-                expressionSettings, eventData);
+        Consumer<String> sendCommand = debouncePhase -> {
+            synchronizeProperties
+                    .forEach(name -> syncPropertyIfNeeded(name, context));
+
+            sendEventToServer(node, type, eventData, debouncePhase);
+        };
+
+        boolean sendNow = resolveFilters(element, type, expressionSettings,
+                eventData, sendCommand);
 
         if (sendNow) {
             // Send if there were not filters or at least one matched
-            sendEventToServer(node, type, eventData, null);
+            sendCommand.accept(null);
         }
     }
 
@@ -1264,9 +1298,9 @@ public class SimpleElementBindingStrategy implements BindingStrategy<Element> {
         node.getTree().sendEventToServer(node, type, eventData);
     }
 
-    private static boolean resolveFilters(Node element, StateNode node,
-            String eventType, JsonObject expressionSettings,
-            JsonObject eventData) {
+    private static boolean resolveFilters(Node element, String eventType,
+            JsonObject expressionSettings, JsonObject eventData,
+            Consumer<String> sendCommand) {
 
         boolean noFilters = true;
         boolean atLeastOneFilterMatched = false;
@@ -1288,9 +1322,7 @@ public class SimpleElementBindingStrategy implements BindingStrategy<Element> {
 
                 // Count as a match only if at least one debounce is eager
                 filterMatched = resolveDebounces(element, debouncerId,
-                        (JsonArray) settings,
-                        triggerdPhase -> sendEventToServer(node, eventType,
-                                eventData, triggerdPhase));
+                        (JsonArray) settings, sendCommand);
             }
 
             atLeastOneFilterMatched |= filterMatched;
@@ -1354,7 +1386,7 @@ public class SimpleElementBindingStrategy implements BindingStrategy<Element> {
     private EventRemover bindPolymerEventHandlerNames(BindingContext context) {
         return ServerEventHandlerBinder.bindServerEventHandlerNames(
                 () -> WidgetUtil.crazyJsoCast(context.htmlNode), context.node,
-                NodeFeatures.POLYMER_SERVER_EVENT_HANDLERS);
+                NodeFeatures.POLYMER_SERVER_EVENT_HANDLERS, false);
     }
 
     private EventRemover bindClientCallableMethods(BindingContext context) {

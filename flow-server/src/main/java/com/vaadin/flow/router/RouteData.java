@@ -15,177 +15,78 @@
  */
 package com.vaadin.flow.router;
 
-import java.io.Serializable;
-import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
+import java.util.Objects;
 
 import com.vaadin.flow.component.Component;
-import com.vaadin.flow.internal.AnnotationReader;
-import com.vaadin.flow.router.internal.RouterUtil;
 
 /**
  * Data collection of information for a specific registered route target.
+ * <p>
+ * Only for read as data is immutable.
+ *
+ * @since 1.0
  */
-public class RouteData implements Comparable<RouteData>, Serializable {
-    private final Class<? extends RouterLayout> parentLayout;
-    private final String url;
-    private final List<Class<?>> parameters;
-    private final Class<? extends Component> navigationTarget;
-    private final List<AliasData> routeAliases;
-
-    /**
-     * Data class with information pertaining to the {@link RouteAlias}.
-     */
-    public static class AliasData implements Comparable<AliasData>, Serializable {
-        private final Class<? extends RouterLayout> parentLayout;
-        private final String url;
-
-        /**
-         * Data class constructor.
-         * 
-         * @param parentLayout
-         *            parent layout for alias
-         * @param url
-         *            target url for alias
-         */
-        public AliasData(Class<? extends RouterLayout> parentLayout,
-                String url) {
-            this.parentLayout = parentLayout;
-            this.url = url;
-        }
-
-        /**
-         * Getter for the {@link RouteAlias} parent layout.
-         * 
-         * @return parent layout for alias
-         */
-        public Class<? extends RouterLayout> getParentLayout() {
-            return parentLayout;
-        }
-
-        /**
-         * Getter for the {@link RouteAlias} url.
-         * 
-         * @return url of the alias
-         */
-        public String getUrl() {
-            return url;
-        }
-
-        @Override
-        public int compareTo(AliasData otherAlias) {
-            return this.getUrl().compareToIgnoreCase(otherAlias.getUrl());
-        }
-
-        @Override
-        public boolean equals(Object obj) {
-            if (obj instanceof AliasData) {
-                AliasData other = (AliasData) obj;
-                return other.parentLayout.equals(this.parentLayout)
-                        && other.url.equals(this.url);
-            }
-            return false;
-        }
-    }
+public class RouteData extends RouteBaseData<RouteData> {
+    private final List<RouteAliasData> routeAliases;
 
     /**
      * RouteData constructor.
-     * 
-     * @param parentLayout
-     *            route parent layout class
+     *
+     * @param parentLayouts
+     *         route parent layout class chain
      * @param url
-     *            full route url
+     *         full route url
      * @param parameters
-     *            navigation target path parameters
+     *         navigation target path parameters
      * @param navigationTarget
-     *            route navigation target
+     *         route navigation target
+     * @param routeAliases
+     *         list of aliases for this route
      */
-    public RouteData(Class<? extends RouterLayout> parentLayout, String url,
-            List<Class<?>> parameters,
-            Class<? extends Component> navigationTarget) {
-        this.parentLayout = parentLayout;
-        this.url = url;
-        this.parameters = parameters;
-        this.navigationTarget = navigationTarget;
-        this.routeAliases = new ArrayList<>();
+    public RouteData(List<Class<? extends RouterLayout>> parentLayouts,
+            String url, List<Class<?>> parameters,
+            Class<? extends Component> navigationTarget,
+            List<RouteAliasData> routeAliases) {
+        super(parentLayouts, url, parameters, navigationTarget);
 
-        AnnotationReader.getAnnotationsFor(navigationTarget, RouteAlias.class)
-                .forEach(alias -> routeAliases
-                        .add(new AliasData(alias.layout(), RouterUtil
-                                .getRouteAliasPath(navigationTarget, alias))));
         Collections.sort(routeAliases);
+        this.routeAliases = Collections.unmodifiableList(routeAliases);
     }
 
     /**
-     * Get the parent layout of {@link Route}.
-     * 
-     * @return route parent layout
-     */
-    public Class<? extends RouterLayout> getParentLayout() {
-        return parentLayout;
-    }
-
-    /**
-     * Get the full route url of {@link Route}.
-     * 
-     * @return route url
-     */
-    public String getUrl() {
-        return url;
-    }
-
-    /**
-     * Get {@link Route} url parameters if any.
-     * 
-     * @return url parameters (by type and in order)
-     */
-    public List<Class<?>> getParameters() {
-        return Collections.unmodifiableList(parameters);
-    }
-
-    /**
-     * Get {@link Route} navigation target.
-     * 
-     * @return navigation target
-     */
-    public Class<? extends Component> getNavigationTarget() {
-        return navigationTarget;
-    }
-
-    /**
-     * Get all {@link RouteAlias}es for this registered {@link Route}.
-     * 
+     * Get all RouteAliases for this registered path.
+     *
      * @return list of route aliases
      */
-    public List<AliasData> getRouteAliases() {
-        return Collections.unmodifiableList(routeAliases);
+    public List<RouteAliasData> getRouteAliases() {
+        return routeAliases;
     }
 
     @Override
-    public int compareTo(RouteData otherRouteData) {
-        return this.getUrl().compareToIgnoreCase(otherRouteData.getUrl());
+    public String toString() {
+        return "RouteData{" + "parentLayout=" + getParentLayout() + ", url='"
+                + getUrl() + '\'' + ", parameters=" + getParameters()
+                + ", navigationTarget=" + getNavigationTarget()
+                + ", routeAliases=" + routeAliases + '}';
     }
 
     @Override
     public boolean equals(Object obj) {
         if (obj instanceof RouteData) {
             RouteData other = (RouteData) obj;
-            return other.parentLayout.equals(this.parentLayout)
-                    && other.url.equals(this.url)
-                    && other.navigationTarget.equals(navigationTarget);
+            return other.getParentLayouts().equals(this.getParentLayouts())
+                    && other.getUrl().equals(this.getUrl()) && other
+                    .getNavigationTarget().equals(getNavigationTarget())
+                    && routeAliases.containsAll(other.routeAliases);
         }
         return false;
     }
 
     @Override
-    public String toString() {
-        return "RouteData{" +
-                "parentLayout=" + parentLayout +
-                ", url='" + url + '\'' +
-                ", parameters=" + parameters +
-                ", navigationTarget=" + navigationTarget +
-                ", routeAliases=" + routeAliases +
-                '}';
+    public int hashCode() {
+        return Objects.hash(getParentLayouts(), getUrl(), getNavigationTarget(),
+                routeAliases);
     }
 }

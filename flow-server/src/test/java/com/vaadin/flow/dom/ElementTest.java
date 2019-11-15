@@ -16,16 +16,13 @@ import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.stream.Collectors;
-
-import org.easymock.EasyMock;
-import org.junit.Assert;
-import org.junit.Test;
-import org.mockito.Mockito;
 
 import com.vaadin.flow.component.Html;
 import com.vaadin.flow.component.Tag;
 import com.vaadin.flow.component.UI;
+import com.vaadin.flow.component.internal.PendingJavaScriptInvocation;
 import com.vaadin.flow.component.internal.UIInternals.JavaScriptInvocation;
 import com.vaadin.flow.dom.impl.BasicElementStateProvider;
 import com.vaadin.flow.internal.NullOwner;
@@ -34,21 +31,28 @@ import com.vaadin.flow.internal.change.ListAddChange;
 import com.vaadin.flow.internal.nodefeature.ComponentMapping;
 import com.vaadin.flow.internal.nodefeature.ElementAttributeMap;
 import com.vaadin.flow.internal.nodefeature.ElementListenerMap;
+import com.vaadin.flow.internal.nodefeature.ElementListenersTest;
 import com.vaadin.flow.internal.nodefeature.ElementPropertyMap;
 import com.vaadin.flow.internal.nodefeature.ElementStylePropertyMap;
 import com.vaadin.flow.internal.nodefeature.SynchronizedPropertiesList;
 import com.vaadin.flow.internal.nodefeature.SynchronizedPropertyEventsList;
+import com.vaadin.flow.server.MockVaadinServletService;
 import com.vaadin.flow.server.StreamResource;
-import com.vaadin.flow.server.VaadinService;
 import com.vaadin.flow.server.VaadinSession;
+import com.vaadin.flow.shared.JsonConstants;
 import com.vaadin.flow.shared.Registration;
+import com.vaadin.tests.util.AlwaysLockedVaadinSession;
 import com.vaadin.tests.util.MockUI;
 import com.vaadin.tests.util.TestUtil;
+import net.jcip.annotations.NotThreadSafe;
+import org.easymock.EasyMock;
+import org.junit.Assert;
+import org.junit.Test;
+import org.mockito.Mockito;
 
 import elemental.json.Json;
 import elemental.json.JsonValue;
 import elemental.json.impl.JreJsonObject;
-import net.jcip.annotations.NotThreadSafe;
 
 @NotThreadSafe
 public class ElementTest extends AbstractNodeTest {
@@ -117,6 +121,9 @@ public class ElementTest extends AbstractNodeTest {
         // Possibly returns a remover or a wrapped return value in the future
         ignore.add("callFunction");
         ignore.add("executeJavaScript");
+        // Returns a future-ish thing with access to the return value
+        ignore.add("callJsFunction");
+        ignore.add("executeJs");
 
         // ignore shadow root methods
         ignore.add("attachShadow");
@@ -2047,6 +2054,19 @@ public class ElementTest extends AbstractNodeTest {
         Assert.assertEquals(1, detached.get());
     }
 
+    @Test
+    public void testRemoveFromTree_inDetachListener_removedFromParent() {
+        Element body = new UI().getElement();
+        Element child = ElementFactory.createDiv();
+        body.appendChild(child);
+
+        child.addDetachListener(event -> child.removeFromTree());
+
+        body.removeAllChildren();
+
+        Assert.assertEquals(null, child.getParent());
+    }
+
     private StreamResource createEmptyResource(String resName) {
         return new StreamResource(resName,
                 () -> new ByteArrayInputStream(new byte[0]));
@@ -2054,13 +2074,8 @@ public class ElementTest extends AbstractNodeTest {
 
     @SuppressWarnings("serial")
     private UI createUI() {
-        VaadinSession session = new VaadinSession(
-                EasyMock.createMock(VaadinService.class)) {
-            @Override
-            public boolean hasLock() {
-                return true;
-            }
-        };
+        VaadinSession session = new AlwaysLockedVaadinSession(
+                new MockVaadinServletService());
         UI ui = new UI() {
             @Override
             public VaadinSession getSession() {
@@ -2146,11 +2161,11 @@ public class ElementTest extends AbstractNodeTest {
     public void callFunctionBeforeAttach() {
         UI ui = new MockUI();
         Element element = ElementFactory.createDiv();
-        element.callFunction("noArgsMethod");
+        element.callJsFunction("noArgsMethod");
         ui.getElement().appendChild(element);
         ui.getInternals().getStateTree().runExecutionsBeforeClientResponse();
 
-        assertPendingJs(ui, "$0.noArgsMethod()", element);
+        assertPendingJs(ui, "return $0.noArgsMethod()", element);
     }
 
     @Test
@@ -2158,10 +2173,10 @@ public class ElementTest extends AbstractNodeTest {
         UI ui = new MockUI();
         Element element = ElementFactory.createDiv();
         ui.getElement().appendChild(element);
-        element.callFunction("noArgsMethod");
+        element.callJsFunction("noArgsMethod");
         ui.getInternals().getStateTree().runExecutionsBeforeClientResponse();
 
-        assertPendingJs(ui, "$0.noArgsMethod()", element);
+        assertPendingJs(ui, "return $0.noArgsMethod()", element);
     }
 
     @Test
@@ -2169,11 +2184,11 @@ public class ElementTest extends AbstractNodeTest {
         UI ui = new MockUI();
         Element element = ElementFactory.createDiv();
         ui.getElement().appendChild(element);
-        element.callFunction("noArgsMethod");
+        element.callJsFunction("noArgsMethod");
         ui.getElement().removeAllChildren();
         ui.getInternals().getStateTree().runExecutionsBeforeClientResponse();
 
-        List<JavaScriptInvocation> invocations = ui.getInternals()
+        List<PendingJavaScriptInvocation> invocations = ui.getInternals()
                 .dumpPendingJavaScriptInvocations();
         Assert.assertTrue(invocations.isEmpty());
     }
@@ -2183,7 +2198,7 @@ public class ElementTest extends AbstractNodeTest {
         UI ui = new MockUI();
         Element element = ElementFactory.createDiv();
         ui.getElement().appendChild(element);
-        element.callFunction("noArgsMethod");
+        element.callJsFunction("noArgsMethod");
 
         Element div = ElementFactory.createDiv();
         ui.getElement().appendChild(div);
@@ -2191,18 +2206,18 @@ public class ElementTest extends AbstractNodeTest {
 
         ui.getInternals().getStateTree().runExecutionsBeforeClientResponse();
 
-        assertPendingJs(ui, "$0.noArgsMethod()", element);
+        assertPendingJs(ui, "return $0.noArgsMethod()", element);
     }
 
     @Test
     public void callFunctionOneParam() {
         UI ui = new MockUI();
         Element element = ElementFactory.createDiv();
-        element.callFunction("method", "foo");
+        element.callJsFunction("method", "foo");
         ui.getElement().appendChild(element);
 
         ui.getInternals().getStateTree().runExecutionsBeforeClientResponse();
-        assertPendingJs(ui, "$0.method($1)", element, "foo");
+        assertPendingJs(ui, "return $0.method($1)", element, "foo");
 
     }
 
@@ -2210,33 +2225,33 @@ public class ElementTest extends AbstractNodeTest {
     public void callFunctionTwoParams() {
         UI ui = new MockUI();
         Element element = ElementFactory.createDiv();
-        element.callFunction("method", "foo", 123);
+        element.callJsFunction("method", "foo", 123);
         ui.getElement().appendChild(element);
         ui.getInternals().getStateTree().runExecutionsBeforeClientResponse();
 
-        assertPendingJs(ui, "$0.method($1,$2)", element, "foo", 123);
+        assertPendingJs(ui, "return $0.method($1,$2)", element, "foo", 123);
     }
 
     @Test
     public void callFunctionOnProperty() {
         UI ui = new MockUI();
         Element element = ElementFactory.createDiv();
-        element.callFunction("property.method");
+        element.callJsFunction("property.method");
         ui.getElement().appendChild(element);
         ui.getInternals().getStateTree().runExecutionsBeforeClientResponse();
 
-        assertPendingJs(ui, "$0.property.method()", element);
+        assertPendingJs(ui, "return $0.property.method()", element);
     }
 
     @Test
     public void callFunctionOnSubProperty() {
         UI ui = new MockUI();
         Element element = ElementFactory.createDiv();
-        element.callFunction("property.other.method");
+        element.callJsFunction("property.other.method");
         ui.getElement().appendChild(element);
         ui.getInternals().getStateTree().runExecutionsBeforeClientResponse();
 
-        assertPendingJs(ui, "$0.property.other.method()", element);
+        assertPendingJs(ui, "return $0.property.other.method()", element);
     }
 
     @Test
@@ -2407,6 +2422,102 @@ public class ElementTest extends AbstractNodeTest {
         Assert.assertFalse(grandVirtualChild.isVirtualChild());
     }
 
+    @Test
+    public void domPropertyListener_registersListenerAndDomTrigger() {
+        Element element = ElementFactory.createDiv();
+
+        AtomicReference<Serializable> listenerValue = new AtomicReference<>();
+
+        element.addPropertyChangeListener("property", "event", event -> {
+            if (listenerValue.getAndSet(event.getValue()) != null) {
+                Assert.fail("Unexpected event");
+            }
+        });
+
+        Assert.assertEquals("The property should be synchronized",
+                DisabledUpdateMode.ONLY_WHEN_ENABLED,
+                element.getNode().getFeature(ElementListenerMap.class)
+                        .getPropertySynchronizationMode("property"));
+
+        Assert.assertEquals(
+                "There should not be any 'conventional' property sync events",
+                0, element.getSynchronizedPropertyEvents().count());
+
+        ElementListenerMap listenerMap = element.getNode()
+                .getFeature(ElementListenerMap.class);
+
+        Assert.assertEquals("A DOM event synchronization should be defined",
+                Collections.singleton(
+                        JsonConstants.SYNCHRONIZE_PROPERTY_TOKEN + "property"),
+                ElementListenersTest.getExpressions(listenerMap, "event"));
+
+        element.setProperty("property", "value");
+        Assert.assertEquals("Listener shold be registered", listenerValue.get(),
+                "value");
+    }
+
+    @Test
+    public void domPropertyListener_unregisterCleansEverything() {
+        Element element = ElementFactory.createDiv();
+
+        DomListenerRegistration registration = element
+                .addPropertyChangeListener("property", "event", event -> {
+                    Assert.fail("Unexpected event");
+                });
+        registration.remove();
+
+        Assert.assertNull("The property should not be synchronized",
+                element.getNode().getFeature(ElementListenerMap.class)
+                        .getPropertySynchronizationMode("property"));
+
+        ElementListenerMap listenerMap = element.getNode()
+                .getFeature(ElementListenerMap.class);
+
+        Assert.assertEquals("There should be no DOM listener",
+                Collections.emptySet(),
+                ElementListenersTest.getExpressions(listenerMap, "event"));
+
+        // Should not trigger assert in the listener
+        element.setProperty("property", "value");
+    }
+
+    @Test
+    public void removingVirtualChildrenIsPossible() {
+        Element parent = new Element("root");
+        Element child1 = new Element("main");
+        Element child2 = new Element("menu");
+
+        parent.appendVirtualChild(child1, child2);
+
+        parent.removeVirtualChild(child2, child1);
+
+        Assert.assertNull(child1.getParent());
+        Assert.assertFalse(child1.isVirtualChild());
+
+        Assert.assertNull(child2.getParent());
+        Assert.assertFalse(child2.isVirtualChild());
+    }
+
+    @Test(expected = IllegalArgumentException.class)
+    public void removeVirtualChildren_notVirtualChild_fails() {
+        Element parent = new Element("root");
+        Element child1 = new Element("main");
+
+        parent.appendChild(child1);
+
+        parent.removeVirtualChild(child1);
+    }
+
+    @Test(expected = IllegalArgumentException.class)
+    public void removeFromParent_virtualChild_fails() {
+        Element parent = new Element("root");
+        Element child1 = new Element("main");
+
+        parent.appendVirtualChild(child1);
+
+        child1.removeFromParent();
+    }
+
     @Override
     protected Element createParentNode() {
         return ElementFactory.createDiv();
@@ -2419,11 +2530,11 @@ public class ElementTest extends AbstractNodeTest {
     }
 
     private void assertPendingJs(UI ui, String js, Serializable... arguments) {
-        List<JavaScriptInvocation> pendingJs = ui.getInternals()
+        List<PendingJavaScriptInvocation> pendingJs = ui.getInternals()
                 .dumpPendingJavaScriptInvocations();
         JavaScriptInvocation expected = new JavaScriptInvocation(js, arguments);
         Assert.assertEquals(1, pendingJs.size());
-        assertEquals(expected, pendingJs.get(0));
+        assertEquals(expected, pendingJs.get(0).getInvocation());
 
     }
 

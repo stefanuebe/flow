@@ -16,6 +16,7 @@
 package com.vaadin.flow.router;
 
 import java.util.Collections;
+import java.util.Set;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
@@ -23,12 +24,11 @@ import org.junit.Assert;
 import org.junit.Test;
 
 import com.vaadin.flow.component.Component;
-import com.vaadin.flow.router.Location;
-import com.vaadin.flow.router.NavigationState;
-import com.vaadin.flow.router.RouteResolver;
+import com.vaadin.flow.internal.CurrentInstance;
 import com.vaadin.flow.router.internal.DefaultRouteResolver;
 import com.vaadin.flow.router.internal.ResolveRequest;
 import com.vaadin.flow.server.InvalidRouteConfigurationException;
+import com.vaadin.flow.server.RouteRegistry;
 
 public class DefaultRouteResolverTest extends RoutingTestBase {
 
@@ -39,14 +39,16 @@ public class DefaultRouteResolverTest extends RoutingTestBase {
             IllegalArgumentException, IllegalAccessException {
         super.init();
         resolver = new DefaultRouteResolver();
+        CurrentInstance.clearAll();
     }
 
     @Test
     public void basic_route_navigation_target_resolved_correctly()
             throws InvalidRouteConfigurationException {
-        router.getRegistry()
-                .setNavigationTargets(Stream.of(RootNavigationTarget.class,
-                        FooNavigationTarget.class, FooBarNavigationTarget.class,
+
+        setRoutes(router.getRegistry(),
+                Stream.of(RootNavigationTarget.class, FooNavigationTarget.class,
+                        FooBarNavigationTarget.class,
                         GreetingNavigationTarget.class)
                         .collect(Collectors.toSet()));
 
@@ -56,6 +58,16 @@ public class DefaultRouteResolverTest extends RoutingTestBase {
                 resolveNavigationTarget("foo"));
         Assert.assertEquals(FooBarNavigationTarget.class,
                 resolveNavigationTarget("foo/bar"));
+    }
+
+    private void setRoutes(RouteRegistry registry,
+            Set<Class<? extends Component>> routes) {
+        RouteConfiguration routeConfiguration = RouteConfiguration
+                .forRegistry(registry);
+        routeConfiguration.update(() -> {
+            routeConfiguration.getHandledRegistry().clean();
+            routes.forEach(routeConfiguration::setAnnotatedRoute);
+        });
     }
 
     @Test
@@ -69,7 +81,7 @@ public class DefaultRouteResolverTest extends RoutingTestBase {
     @Test
     public void string_url_parameter_correctly_set_to_state()
             throws InvalidRouteConfigurationException {
-        router.getRegistry().setNavigationTargets(
+        setRoutes(router.getRegistry(),
                 Collections.singleton(GreetingNavigationTarget.class));
 
         Assert.assertEquals(Collections.singletonList("World"),
@@ -80,10 +92,9 @@ public class DefaultRouteResolverTest extends RoutingTestBase {
     @Test
     public void route_precedence_with_parameters()
             throws InvalidRouteConfigurationException {
-        router.getRegistry()
-                .setNavigationTargets(Stream
-                        .of(GreetingNavigationTarget.class,
-                                OtherGreetingNavigationTarget.class)
+        setRoutes(router.getRegistry(),
+                Stream.of(GreetingNavigationTarget.class,
+                        OtherGreetingNavigationTarget.class)
                         .collect(Collectors.toSet()));
 
         Assert.assertEquals(GreetingNavigationTarget.class,
@@ -95,7 +106,7 @@ public class DefaultRouteResolverTest extends RoutingTestBase {
     @Test
     public void wrong_number_of_parameters_does_not_match()
             throws InvalidRouteConfigurationException {
-        router.getRegistry().setNavigationTargets(
+        setRoutes(router.getRegistry(),
                 Collections.singleton(GreetingNavigationTarget.class));
 
         Assert.assertEquals(null,

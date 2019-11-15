@@ -18,14 +18,13 @@ package com.vaadin.client;
 
 import com.vaadin.flow.shared.BrowserDetails;
 
-import elemental.client.Browser;
-
 /**
- * Class used to query information about web browser.
+ * Provides a way to query information about web browser.
  *
  * Browser details are detected only once and those are stored in this singleton
  * class.
  *
+ * @since 1.0
  */
 public class BrowserInfo {
 

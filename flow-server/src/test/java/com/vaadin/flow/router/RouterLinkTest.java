@@ -18,9 +18,9 @@ package com.vaadin.flow.router;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.HashMap;
-import java.util.HashSet;
 import java.util.Map;
 
+import net.jcip.annotations.NotThreadSafe;
 import org.junit.Assert;
 import org.junit.Before;
 import org.junit.Rule;
@@ -34,15 +34,13 @@ import com.vaadin.flow.component.UI;
 import com.vaadin.flow.internal.HasCurrentService;
 import com.vaadin.flow.server.InvalidRouteConfigurationException;
 import com.vaadin.flow.server.VaadinService;
-import com.vaadin.flow.server.startup.RouteRegistry;
+import com.vaadin.flow.server.startup.ApplicationRouteRegistry;
 import com.vaadin.flow.shared.ApplicationConstants;
-
-import net.jcip.annotations.NotThreadSafe;
 
 @NotThreadSafe
 public class RouterLinkTest extends HasCurrentService {
 
-    private RouteRegistry registry;
+    private ApplicationRouteRegistry registry;
 
     private Router router;
 
@@ -63,9 +61,14 @@ public class RouterLinkTest extends HasCurrentService {
     public void setUp() throws NoSuchFieldException, IllegalAccessException,
             InvalidRouteConfigurationException {
         registry = new TestRouteRegistry();
-        registry.setNavigationTargets(new HashSet<>(
-                Arrays.asList(TestView.class, FooNavigationTarget.class,
-                        GreetingNavigationTarget.class)));
+        RouteConfiguration routeConfiguration = RouteConfiguration
+                .forRegistry(registry);
+        routeConfiguration.update(() -> {
+            routeConfiguration.getHandledRegistry().clean();
+            Arrays.asList(TestView.class, FooNavigationTarget.class,
+                    GreetingNavigationTarget.class)
+                    .forEach(routeConfiguration::setAnnotatedRoute);
+        });
         router = new Router(registry);
 
         ui = new UI() {
@@ -107,6 +110,30 @@ public class RouterLinkTest extends HasCurrentService {
         Assert.assertTrue(link.getElement().hasAttribute("href"));
 
         Assert.assertEquals("bar/foo", link.getElement().getAttribute("href"));
+    }
+
+    @Test
+    public void setRoute_withoutRouter() {
+        RouterLink link = new RouterLink();
+
+        ui.add(link);
+        link.setRoute(FooNavigationTarget.class);
+
+        Assert.assertTrue(link.getElement().hasAttribute("href"));
+
+        Assert.assertEquals("foo", link.getElement().getAttribute("href"));
+    }
+
+    @Test
+    public void setRoute_withoutRouterWithParameter() {
+        RouterLink link = new RouterLink();
+
+        ui.add(link);
+        link.setRoute(GreetingNavigationTarget.class, "foo");
+
+        Assert.assertTrue(link.getElement().hasAttribute("href"));
+
+        Assert.assertEquals("greeting/foo", link.getElement().getAttribute("href"));
     }
 
     @Test
@@ -176,11 +203,6 @@ public class RouterLinkTest extends HasCurrentService {
         VaadinService service = VaadinService.getCurrent();
         Mockito.when(service.getRouter()).thenReturn(null);
         new RouterLink("Show something", TestView.class);
-    }
-
-    @Test(expected = IllegalArgumentException.class)
-    public void invalidRoute_notRouteTarget() {
-        new RouterLink(router, "Show something", Component.class);
     }
 
     private void triggerNavigationEvent(com.vaadin.flow.router.Router router,

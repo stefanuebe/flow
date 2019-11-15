@@ -20,6 +20,8 @@ import java.io.Serializable;
 /**
  * An error thrown by the framework and handled by an {@link ErrorHandler}.
  * Typically handled by {@link VaadinSession#getErrorHandler()}.
+ *
+ * @since 1.0
  */
 public class ErrorEvent implements Serializable {
 
@@ -45,7 +47,7 @@ public class ErrorEvent implements Serializable {
     }
 
     /**
-     * Method for finding the error handler for the given session.
+     * Finds the error handler for the given session.
      *
      * @param session
      *            the active session

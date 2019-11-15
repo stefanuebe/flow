@@ -18,12 +18,14 @@ package com.vaadin.client;
 
 import com.google.gwt.core.client.GWT;
 import com.google.gwt.core.client.Scheduler;
+
 import com.vaadin.client.communication.LoadingIndicatorConfigurator;
 import com.vaadin.client.communication.PollConfigurator;
 import com.vaadin.client.communication.ReconnectDialogConfiguration;
 import com.vaadin.client.flow.RouterLinkHandler;
 import com.vaadin.client.flow.StateNode;
 import com.vaadin.client.flow.binding.Binder;
+
 import elemental.client.Browser;
 import elemental.dom.Element;
 import elemental.dom.Node;
@@ -32,6 +34,8 @@ import elemental.dom.Node;
  * Main class for an application / UI.
  * <p>
  * Initializes the registry and starts the application.
+ *
+ * @since 1.0
  */
 public class ApplicationConnection {
 
@@ -55,15 +59,20 @@ public class ApplicationConnection {
         // Bind UI configuration objects
         PollConfigurator.observe(rootNode, registry.getPoller());
         ReconnectDialogConfiguration.bind(registry.getConnectionStateHandler());
-        LoadingIndicatorConfigurator.observe(rootNode, registry.getLoadingIndicator());
-
-        new PopStateHandler(registry).bind();
+        LoadingIndicatorConfigurator.observe(rootNode,
+                registry.getLoadingIndicator());
 
         Element body = Browser.getDocument().getBody();
 
         rootNode.setDomNode(body);
         Binder.bind(rootNode, body);
-        RouterLinkHandler.bind(registry, body);
+
+        // When app is run as a WC do not add listener for routing events.
+        // Routing is responsability of the hosting application (#6108)
+        if (!applicationConfiguration.isWebComponentMode()) {
+            new PopStateHandler(registry).bind();
+            RouterLinkHandler.bind(registry, body);
+        }
 
         Console.log("Starting application "
                 + applicationConfiguration.getApplicationId());
@@ -75,7 +84,8 @@ public class ApplicationConnection {
         boolean productionMode = applicationConfiguration.isProductionMode();
         boolean requestTiming = applicationConfiguration.isRequestTiming();
         publishProductionModeJavascriptMethods(appRootPanelName, productionMode,
-                requestTiming);
+                requestTiming,
+                applicationConfiguration.getExportedWebComponents());
         if (!productionMode) {
             String servletVersion = applicationConfiguration
                     .getServletVersion();
@@ -132,9 +142,12 @@ public class ApplicationConnection {
      * @param requestTiming
      *            <code>true</code> if request timing info should be made
      *            available, <code>false</code> otherwise
+     * @param exportedWebComponents
+     *            a list of web component tags exported by this UI
      */
     private native void publishProductionModeJavascriptMethods(
-            String applicationId, boolean productionMode, boolean requestTiming)
+            String applicationId, boolean productionMode, boolean requestTiming,
+            String[] exportedWebComponents)
     /*-{
         var ap = this;
         var client = {};
@@ -148,6 +161,13 @@ public class ApplicationConnection {
         client.poll = $entry(function() {
                 var poller = ap.@ApplicationConnection::registry.@com.vaadin.client.Registry::getPoller()();
                 poller.@com.vaadin.client.communication.Poller::poll()();
+        });
+        client.connectWebComponent = $entry(function(eventData) {
+            // Connects the web component described by eventData with the server
+            var registry = ap.@ApplicationConnection::registry;
+            var sc = registry.@com.vaadin.client.Registry::getServerConnector()();
+            var nodeId = registry.@com.vaadin.client.Registry::getStateTree()().@com.vaadin.client.flow.StateTree::getRootNode()().@com.vaadin.client.flow.StateNode::id;
+            sc.@com.vaadin.client.communication.ServerConnector::sendEventMessage(ILjava/lang/String;Lelemental/json/JsonObject;)(nodeId, 'connect-web-component', eventData);
         });
         if (requestTiming) {
            client.getProfilingData = $entry(function() {
@@ -165,18 +185,18 @@ public class ApplicationConnection {
             return pd;
         });
         }
-        $wnd.Vaadin.Flow.resolveUri = $entry(function(uriToResolve) {
+        client.resolveUri = $entry(function(uriToResolve) {
             var ur = ap.@ApplicationConnection::registry.@com.vaadin.client.Registry::getURIResolver()();
             return ur.@com.vaadin.client.URIResolver::resolveVaadinUri(Ljava/lang/String;)(uriToResolve);
         });
-    
-        $wnd.Vaadin.Flow.sendEventMessage = $entry(function(nodeId, eventType, eventData) {
+
+        client.sendEventMessage = $entry(function(nodeId, eventType, eventData) {
             var sc = ap.@ApplicationConnection::registry.@com.vaadin.client.Registry::getServerConnector()();
             sc.@com.vaadin.client.communication.ServerConnector::sendEventMessage(ILjava/lang/String;Lelemental/json/JsonObject;)(nodeId,eventType,eventData);
         });
-    
+
         client.initializing = false;
-    
+        client.exportedWebComponents = exportedWebComponents;
         $wnd.Vaadin.Flow.clients[applicationId] = client;
     }-*/;
 
@@ -202,7 +222,7 @@ public class ApplicationConnection {
         client.getVersionInfo = $entry(function(parameter) {
             return { "flow": servletVersion};
         });
-    
+
     }-*/;
 
     /**

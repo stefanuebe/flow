@@ -16,6 +16,8 @@
 package com.vaadin.flow.server.communication.rpc;
 
 import java.io.Serializable;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
 
 import org.junit.Assert;
 import org.junit.Test;
@@ -29,6 +31,7 @@ import com.vaadin.flow.internal.JsonCodec;
 import com.vaadin.flow.internal.StateNode;
 import com.vaadin.flow.internal.nodefeature.ElementPropertyMap;
 import com.vaadin.flow.internal.nodefeature.ModelList;
+import com.vaadin.flow.internal.nodefeature.NodeFeature;
 import com.vaadin.flow.internal.nodefeature.NodeFeatureRegistry;
 import com.vaadin.flow.shared.JsonConstants;
 
@@ -187,7 +190,7 @@ public class MapSyncRpcHandlerTest {
     }
 
     @Test
-    public void disabledElement_updateIsAllowed_updateIsDone()
+    public void disabledElement_updateIsAllowedBySynchronizeProperty_updateIsDone()
             throws Exception {
         Element element = ElementFactory.createDiv();
         UI ui = new UI();
@@ -203,7 +206,24 @@ public class MapSyncRpcHandlerTest {
     }
 
     @Test
-    public void implicitlyDisabledElement_updateIsAllowed_updateIsDone()
+    public void disabledElement_updateIsAllowedByEventListener_updateIsDone()
+            throws Exception {
+        Element element = ElementFactory.createDiv();
+        UI ui = new UI();
+        ui.getElement().appendChild(element);
+
+        element.setEnabled(false);
+        element.addEventListener(DUMMY_EVENT, event -> {
+        }).synchronizeProperty(TEST_PROPERTY)
+                .setDisabledUpdateMode(DisabledUpdateMode.ALWAYS);
+
+        sendSynchronizePropertyEvent(element, ui, TEST_PROPERTY, NEW_VALUE);
+
+        Assert.assertEquals(NEW_VALUE, element.getPropertyRaw(TEST_PROPERTY));
+    }
+
+    @Test
+    public void implicitlyDisabledElement_updateIsAllowedBySynchronizeProperty_updateIsDone()
             throws Exception {
         Element element = ElementFactory.createDiv();
         UI ui = new UI();
@@ -219,7 +239,24 @@ public class MapSyncRpcHandlerTest {
     }
 
     @Test
-    public void noSyncPropertiesFeature_doesntThrow() {
+    public void implicitlyDisabledElement_updateIsAllowedByEventListener_updateIsDone()
+            throws Exception {
+        Element element = ElementFactory.createDiv();
+        UI ui = new UI();
+        ui.getElement().appendChild(element);
+
+        ui.setEnabled(false);
+        element.addEventListener(DUMMY_EVENT, event -> {
+        }).synchronizeProperty(TEST_PROPERTY)
+                .setDisabledUpdateMode(DisabledUpdateMode.ALWAYS);
+
+        sendSynchronizePropertyEvent(element, ui, TEST_PROPERTY, NEW_VALUE);
+
+        Assert.assertEquals(NEW_VALUE, element.getPropertyRaw(TEST_PROPERTY));
+    }
+
+    @Test(expected = IllegalArgumentException.class)
+    public void noSyncPropertiesFeature_noExplicitAllow_throws() {
         StateNode noSyncProperties = new StateNode(ElementPropertyMap.class);
 
         ElementPropertyMap map = noSyncProperties
@@ -230,6 +267,40 @@ public class MapSyncRpcHandlerTest {
                         NEW_VALUE));
 
         Assert.assertEquals(NEW_VALUE, map.getProperty(TEST_PROPERTY));
+    }
+
+    @Test
+    public void handleNode_callsElementPropertyMapDeferredUpdateFromClient() {
+        AtomicInteger deferredUpdateInvocations = new AtomicInteger();
+        AtomicReference<String> deferredKey = new AtomicReference<>();
+        StateNode node = new StateNode(ElementPropertyMap.class) {
+
+            private ElementPropertyMap map = new ElementPropertyMap(this) {
+                @Override
+                public Runnable deferredUpdateFromClient(String key,
+                        Serializable value) {
+                    deferredUpdateInvocations.incrementAndGet();
+                    deferredKey.set(key);
+                    return () -> {
+                    };
+                }
+            };
+
+            @Override
+            public <F extends NodeFeature> F getFeature(Class<F> featureType) {
+                if (featureType.equals(ElementPropertyMap.class)) {
+                    return featureType.cast(map);
+                }
+                return super.getFeature(featureType);
+            }
+
+        };
+
+        new MapSyncRpcHandler().handleNode(node,
+                createSyncPropertyInvocation(node, TEST_PROPERTY, NEW_VALUE));
+
+        Assert.assertEquals(1, deferredUpdateInvocations.get());
+        Assert.assertEquals(TEST_PROPERTY, deferredKey.get());
     }
 
     private static void sendSynchronizePropertyEvent(Element element, UI ui,

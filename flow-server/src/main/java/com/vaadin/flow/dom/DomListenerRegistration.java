@@ -15,6 +15,10 @@
  */
 package com.vaadin.flow.dom;
 
+import java.util.Set;
+
+import com.vaadin.flow.function.SerializableRunnable;
+import com.vaadin.flow.shared.JsonConstants;
 import com.vaadin.flow.shared.Registration;
 
 /**
@@ -86,6 +90,15 @@ public interface DomListenerRegistration extends Registration {
     /**
      * Configure whether this listener will be called even in cases when the
      * element is disabled.
+     * <p>
+     * When used in combination with {@link #synchronizeProperty(String)}, the
+     * most permissive update mode for the same property will be effective. This
+     * means that there might be unexpected property updates for a disabled
+     * component if multiple parties independently configure different aspects
+     * for the same component. This is based on the assumption that if a
+     * property is explicitly safe to update for disabled components in one
+     * context, then the nature of that property is probably such that it's also
+     * safe to update in other contexts.
      *
      * @param disabledUpdateMode
      *            controls RPC communication from the client side to the server
@@ -159,5 +172,92 @@ public interface DomListenerRegistration extends Registration {
     default DomListenerRegistration throttle(int period) {
         return debounce(period, DebouncePhase.LEADING,
                 DebouncePhase.INTERMEDIATE);
+    }
+
+    /**
+     * Gets the debounce timeout that is configured by debounce or throttle.
+     *
+     * @see #debounce(int, DebouncePhase, DebouncePhase...)
+     * @see #debounce(int)
+     * @see #throttle(int)
+     *
+     * @return timeout in milliseconds,
+     *         or <code>0</code> if debouncing is disabled
+     */
+    default int getDebounceTimeout() {
+        /*
+         * Dummy backwards compatibility implementation to keep old custom code
+         * compiling.
+         */
+        throw new UnsupportedOperationException();
+    }
+
+    /**
+     * Gets the debouncing phases for which this listener should be triggered.
+     *
+     * @see #debounce(int, DebouncePhase, DebouncePhase...)
+     * @see #debounce(int)
+     * @see #throttle(int)
+     *
+     * @return debounce phases
+     */
+    default Set<DebouncePhase> getDebouncePhases() {
+        /*
+         * Dummy backwards compatibility implementation to keep old custom code
+         * compiling.
+         */
+        throw new UnsupportedOperationException();
+    }
+
+    /**
+     * Gets the event type that the listener is registered for.
+     *
+     * @return DOM event type of the listener
+     */
+    default String getEventType() {
+        /*
+         * Dummy backwards compatibility implementation to keep old custom code
+         * compiling.
+         */
+        throw new UnsupportedOperationException();
+    }
+
+    /**
+     * Adds a handler that will be run when this registration is removed.
+     *
+     * @param unregisterHandler
+     *            the handler to run when the registration is removed, not
+     *            <code>null</code>
+     * @return this registration, for chaining
+     *
+     * @since 1.3
+     */
+    default DomListenerRegistration onUnregister(
+            SerializableRunnable unregisterHandler) {
+        /*
+         * Dummy backwards compatibility implementation to keep old custom code
+         * compiling, even though custom implementations won't work with the new
+         * addPropertyListener overload that uses this method.
+         */
+        throw new UnsupportedOperationException();
+    }
+
+    /**
+     * Marks that the DOM event of this registration should trigger
+     * synchronization for the given property.
+     *
+     * @return this registration, for chaining
+     *
+     * @param propertyName
+     *            the name of the property to synchronize, not <code>null</code>
+     *            or <code>""</code>
+     * @return this registration, for chaining
+     */
+    default DomListenerRegistration synchronizeProperty(String propertyName) {
+        if (propertyName == null || propertyName.isEmpty()) {
+            throw new IllegalArgumentException("Property name must be given");
+        }
+        return addEventData(
+                JsonConstants.SYNCHRONIZE_PROPERTY_TOKEN + propertyName);
     }
 }

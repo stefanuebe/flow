@@ -43,7 +43,7 @@ import org.slf4j.LoggerFactory;
  * instance.
  *
  * @author Vaadin Ltd
- *
+ * @since 1.2
  */
 public class VaadinBundleTracker extends BundleTracker<Bundle> {
 
@@ -73,7 +73,6 @@ public class VaadinBundleTracker extends BundleTracker<Bundle> {
                 // Now scan all active bundles for all classes instead of
                 // scanning every inidividual activated bundle/
                 executor.execute(this::scanActiveBundles);
-
             } else if ((flowServerBundle.getState() & Bundle.ACTIVE) != 0) {
                 // If flow-server bundle is already active then scan bundle for
                 // classes
@@ -159,6 +158,10 @@ public class VaadinBundleTracker extends BundleTracker<Bundle> {
         for (String clazz : classes) {
             String className = clazz.replaceAll("\\.class$", "").replace('/',
                     '.');
+            if (bundle.equals(flowServerBundle)
+                    && !className.startsWith("com.vaadin")) {
+                continue;
+            }
             if ("module-info".equals(className)) {
                 // New modular Java info class which we are not intrested in
                 continue;

@@ -17,6 +17,7 @@ package com.vaadin.flow.component.html;
 
 import java.util.Optional;
 
+import com.vaadin.flow.component.Component;
 import com.vaadin.flow.component.HtmlContainer;
 import com.vaadin.flow.component.PropertyDescriptor;
 import com.vaadin.flow.component.PropertyDescriptors;
@@ -80,13 +81,46 @@ public class Anchor extends HtmlContainer {
     }
 
     /**
-     * Sets the URL that this anchor links to.
+     * Creates an anchor component with the given href and components
+     * as children of this component.
+     *
+     * @see #setHref(AbstractStreamResource)
+     * @see #add(Component...)
      *
      * @param href
-     *            the href to set, or <code>""</code> to remove the href value
+     *            the href to set
+     * @param components
+     *            the components to add
+     */
+    public Anchor(String href, Component... components) {
+        setHref(href);
+        add(components);
+    }
+
+    /**
+     * Sets the URL that this anchor links to.
+     * <p>
+     * Use the method {@link #removeHref()} to remove the <b>href</b> attribute
+     * instead of setting it to an empty string.
+     *
+     * @see #removeHref()
+     * @see #setHref(AbstractStreamResource)
+     *
+     * @param href
+     *            the href to set
      */
     public void setHref(String href) {
         set(hrefDescriptor, href);
+    }
+
+    /**
+     * Removes href attribute.
+     *
+     * @see Anchor#setHref(String)
+     *
+     */
+    public void removeHref() {
+        getElement().removeAttribute("href");
     }
 
     /**

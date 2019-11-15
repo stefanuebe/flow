@@ -20,12 +20,15 @@ import javax.servlet.ServletException;
 import java.util.Arrays;
 import java.util.HashSet;
 
+import com.vaadin.flow.internal.CurrentInstance;
+import org.junit.After;
 import org.junit.Assert;
 import org.junit.Test;
 import org.mockito.ArgumentCaptor;
 import org.mockito.Mockito;
 
 import com.vaadin.flow.function.DeploymentConfiguration;
+import com.vaadin.flow.router.RouteConfiguration;
 import com.vaadin.flow.server.InvalidRouteConfigurationException;
 import com.vaadin.flow.server.MockServletConfig;
 import com.vaadin.flow.server.MockVaadinSession;
@@ -53,8 +56,13 @@ public class InvalidUrlTest {
                 Integer.valueOf(404), statusCodeCaptor.getValue());
     }
 
+    @After
+    public void tearDown() {
+        CurrentInstance.clearAll();
+    }
+
     private static void initUI(UI ui, String initialLocation,
-            ArgumentCaptor<Integer> statusCodeCaptor)
+                               ArgumentCaptor<Integer> statusCodeCaptor)
             throws InvalidRouteConfigurationException {
         try {
             VaadinServletRequest request = Mockito
@@ -87,10 +95,13 @@ public class InvalidUrlTest {
 
             ui.getInternals().setSession(session);
 
-            ui.getRouter().getRegistry()
-                    .setNavigationTargets(new HashSet<>(
-                            Arrays.asList(UITest.RootNavigationTarget.class,
-                                    UITest.FooBarNavigationTarget.class)));
+            RouteConfiguration routeConfiguration = RouteConfiguration
+                    .forRegistry(ui.getRouter().getRegistry());
+            routeConfiguration.update(() -> {
+                routeConfiguration.getHandledRegistry().clean();
+                Arrays.asList(UITest.RootNavigationTarget.class,
+                        UITest.FooBarNavigationTarget.class).forEach(routeConfiguration::setAnnotatedRoute);
+            });
 
             ui.doInit(request, 0);
             ui.getRouter().initializeUI(ui, request);

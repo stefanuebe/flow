@@ -15,17 +15,21 @@
  */
 package com.vaadin.flow.component;
 
+import com.vaadin.flow.dom.Element;
+
 /**
- * Interface with the methods implemented by components that can gain and lose
- * focus.
+ * Represents a component that can gain and lose focus.
  *
  * @param <T>
  *            the type of the component which implements the interface
  * @see BlurNotifier
  * @see FocusNotifier
+ *
+ * @author Vaadin Ltd.
+ * @since 1.0
  */
-public interface Focusable<T extends Component> extends HasElement,
-        BlurNotifier<T>, FocusNotifier<T>, HasEnabled {
+public interface Focusable<T extends Component>
+        extends HasElement, BlurNotifier<T>, FocusNotifier<T>, HasEnabled {
 
     /**
      * Sets the <code>tabindex</code> attribute in the component. The tabIndex
@@ -102,7 +106,14 @@ public interface Focusable<T extends Component> extends HasElement,
      *      at MDN</a>
      */
     default void focus() {
-        getElement().callFunction("focus");
+        /*
+         * Use setTimeout to call the focus function only after the element is
+         * attached, and after the initial rendering cycle, so webcomponents can
+         * be ready by the time when the function is called.
+         */
+        Element element = getElement();
+        // Using $0 since "this" won't work inside the function
+        element.executeJs("setTimeout(function(){$0.focus()},0)", element);
     }
 
     /**
@@ -114,7 +125,42 @@ public interface Focusable<T extends Component> extends HasElement,
      *      at MDN</a>
      */
     default void blur() {
-        getElement().callFunction("blur");
+        getElement().callJsFunction("blur");
     }
 
+    /**
+     * Adds a shortcut which focuses the {@link Component} which implements
+     * {@link Focusable} interface. The shortcut's event listener is in global
+     * scope and the shortcut's lifecycle is tied to {@code this} component.
+     * <p>
+     * Use the returned {@link ShortcutRegistration} to fluently configure the
+     * shortcut.
+     *
+     * @param key
+     *            primary {@link Key} used to trigger the shortcut. Cannot be
+     *            null.
+     * @param keyModifiers
+     *            {@link KeyModifier KeyModifiers} that need to be pressed along
+     *            with the {@code key} for the shortcut to trigger
+     * @return {@link ShortcutRegistration} for configuring the shortcut and
+     *         removing
+     */
+    default ShortcutRegistration addFocusShortcut(Key key,
+            KeyModifier... keyModifiers) {
+        if (!(this instanceof Component)) {
+            throw new IllegalStateException(String.format(
+                    "The class '%s' doesn't extend '%s'. "
+                            + "Make your implementation for the method '%s'.",
+                    getClass().getName(), Component.class.getSimpleName(),
+                    "addFocusShortcut(Key, KeyModifier...)"));
+        }
+
+        if (key == null) {
+            throw new IllegalArgumentException(
+                    String.format(Shortcuts.NULL, "key"));
+        }
+
+        return new ShortcutRegistration((Component) this, UI::getCurrent,
+                event -> this.focus(), key).withModifiers(keyModifiers);
+    }
 }

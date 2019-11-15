@@ -40,14 +40,18 @@ import com.vaadin.flow.component.Component;
 import com.vaadin.flow.component.Composite;
 import com.vaadin.flow.component.UI;
 import com.vaadin.flow.component.internal.DependencyList;
+import com.vaadin.flow.component.internal.PendingJavaScriptInvocation;
 import com.vaadin.flow.component.internal.UIInternals;
-import com.vaadin.flow.component.internal.UIInternals.JavaScriptInvocation;
+import com.vaadin.flow.function.SerializableConsumer;
 import com.vaadin.flow.internal.JsonCodec;
 import com.vaadin.flow.internal.JsonUtils;
+import com.vaadin.flow.internal.StateNode;
 import com.vaadin.flow.internal.StateTree;
 import com.vaadin.flow.internal.change.NodeAttachChange;
 import com.vaadin.flow.internal.change.NodeChange;
 import com.vaadin.flow.internal.nodefeature.ComponentMapping;
+import com.vaadin.flow.internal.nodefeature.ReturnChannelMap;
+import com.vaadin.flow.internal.nodefeature.ReturnChannelRegistration;
 import com.vaadin.flow.server.DependencyFilter;
 import com.vaadin.flow.server.DependencyFilter.FilterContext;
 import com.vaadin.flow.server.SystemMessages;
@@ -137,10 +141,12 @@ public class UidlWriter implements Serializable {
      *            The {@link UI} whose changes to write
      * @param async
      *            True if this message is sent by the server asynchronously,
-     *            false if it is a response to a client message.
+     *            false if it is a response to a client message
+     * @param resync
+     *            True iff the client should be asked to resynchronize
      * @return JSON object containing the UIDL response
      */
-    public JsonObject createUidl(UI ui, boolean async) {
+    public JsonObject createUidl(UI ui, boolean async, boolean resync) {
         JsonObject response = Json.createObject();
 
         UIInternals uiInternals = ui.getInternals();
@@ -156,10 +162,12 @@ public class UidlWriter implements Serializable {
         getLogger().debug("* Creating response to client");
 
         int syncId = service.getDeploymentConfiguration().isSyncIdCheckEnabled()
-                ? uiInternals.getServerSyncId()
-                : -1;
+                ? uiInternals.getServerSyncId() : -1;
 
         response.put(ApplicationConstants.SERVER_SYNC_ID, syncId);
+        if (resync) {
+            response.put(ApplicationConstants.RESYNCHRONIZE_ID, true);
+        }
         int nextClientToServerMessageId = uiInternals
                 .getLastProcessedClientToServerId() + 1;
         response.put(ApplicationConstants.CLIENT_TO_SERVER_ID,
@@ -189,7 +197,7 @@ public class UidlWriter implements Serializable {
             response.put("changes", stateChanges);
         }
 
-        List<JavaScriptInvocation> executeJavaScriptList = uiInternals
+        List<PendingJavaScriptInvocation> executeJavaScriptList = uiInternals
                 .dumpPendingJavaScriptInvocations();
         if (!executeJavaScriptList.isEmpty()) {
             response.put(JsonConstants.UIDL_KEY_EXECUTE,
@@ -201,6 +209,20 @@ public class UidlWriter implements Serializable {
         }
         uiInternals.incrementServerId();
         return response;
+    }
+
+    /**
+     * Creates a JSON object containing all pending changes to the given UI.
+     *
+     * @param ui
+     *            The {@link UI} whose changes to write
+     * @param async
+     *            True if this message is sent by the server asynchronously,
+     *            false if it is a response to a client message.
+     * @return JSON object containing the UIDL response
+     */
+    public JsonObject createUidl(UI ui, boolean async) {
+        return createUidl(ui, async, false);
     }
 
     private static void populateDependencies(JsonObject response,
@@ -268,10 +290,12 @@ public class UidlWriter implements Serializable {
 
         if (stream == null) {
             String resolvedPath = service.resolveResource(url, browser);
-            getLogger().warn("The path '{}' for inline resource "
-                    + "has been resolved to '{}'. "
-                    + "But resource is not available via the servlet context. "
-                    + "Trying to load '{}' as a URL", url, resolvedPath, url);
+            getLogger().warn(
+                    "The path '{}' for inline resource "
+                            + "has been resolved to '{}'. "
+                            + "But resource is not available via the servlet context. "
+                            + "Trying to load '{}' as a URL",
+                    url, resolvedPath, url);
             try {
                 stream = new URL(url).openConnection().getInputStream();
             } catch (MalformedURLException exception) {
@@ -296,22 +320,75 @@ public class UidlWriter implements Serializable {
 
     // non-private for testing purposes
     static JsonArray encodeExecuteJavaScriptList(
-            List<JavaScriptInvocation> executeJavaScriptList) {
+            List<PendingJavaScriptInvocation> executeJavaScriptList) {
         return executeJavaScriptList.stream()
                 .map(UidlWriter::encodeExecuteJavaScript)
                 .collect(JsonUtils.asArray());
     }
 
+    private static ReturnChannelRegistration createReturnValueChannel(
+            StateNode owner, List<ReturnChannelRegistration> registrations,
+            SerializableConsumer<JsonValue> action) {
+        ReturnChannelRegistration channel = owner
+                .getFeature(ReturnChannelMap.class)
+                .registerChannel(arguments -> {
+                    registrations.forEach(ReturnChannelRegistration::remove);
+
+                    action.accept(arguments.get(0));
+                });
+
+        registrations.add(channel);
+
+        return channel;
+    }
+
     private static JsonArray encodeExecuteJavaScript(
-            JavaScriptInvocation executeJavaScript) {
-        Stream<JsonValue> parametersStream = executeJavaScript.getParameters()
-                .stream().map(JsonCodec::encodeWithTypeInfo);
+            PendingJavaScriptInvocation invocation) {
+        List<Object> parametersList = invocation.getInvocation()
+                .getParameters();
+
+        Stream<Object> parameters = parametersList.stream();
+        String expression = invocation.getInvocation().getExpression();
+
+        if (invocation.isSubscribed()) {
+            StateNode owner = invocation.getOwner();
+
+            List<ReturnChannelRegistration> channels = new ArrayList<>();
+
+            ReturnChannelRegistration successChannel = createReturnValueChannel(
+                    owner, channels, invocation::complete);
+            ReturnChannelRegistration errorChannel = createReturnValueChannel(
+                    owner, channels, invocation::completeExceptionally);
+
+            // Inject both channels as new parameters
+            parameters = Stream.concat(parameters,
+                    Stream.of(successChannel, errorChannel));
+            int successIndex = parametersList.size();
+            int errorIndex = successIndex + 1;
+
+            /*
+             * Run the original expression wrapped in a function to capture any
+             * return statement. Pass the return value through Promise.resolve
+             * which resolves regular values immediately and waits for thenable
+             * values. Call either of the handlers once the promise completes.
+             * If the expression throws synchronously, run the error handler.
+             */
+            //@formatter:off
+            expression =
+                  "try{"
+                +   "Promise.resolve((function(){"
+                +     expression
+                +   "})()).then($"+successIndex+",function(error){$"+errorIndex+"(''+error)})"
+                + "}catch(error){"
+                +   "$"+errorIndex+"(''+error)"
+                + "}";
+            //@formatter:on
+        }
 
         // [argument1, argument2, ..., script]
         return Stream
-                .concat(parametersStream,
-                        Stream.of(
-                                Json.create(executeJavaScript.getExpression())))
+                .concat(parameters.map(JsonCodec::encodeWithTypeInfo),
+                        Stream.of(Json.create(expression)))
                 .collect(JsonUtils.asArray());
     }
 

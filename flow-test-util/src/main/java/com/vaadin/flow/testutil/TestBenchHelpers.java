@@ -15,12 +15,17 @@
  */
 package com.vaadin.flow.testutil;
 
+import java.io.IOException;
+import java.io.InputStream;
+import java.nio.charset.StandardCharsets;
 import java.util.List;
 import java.util.Objects;
+import java.util.function.Predicate;
 import java.util.logging.Level;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
+import org.apache.commons.io.IOUtils;
 import org.junit.Assert;
 import org.openqa.selenium.By;
 import org.openqa.selenium.JavascriptExecutor;
@@ -36,6 +41,8 @@ import com.vaadin.testbench.parallel.ParallelTest;
 
 /**
  * Helpers for running testbench tests.
+ *
+ * @since 1.0
  */
 public class TestBenchHelpers extends ParallelTest {
 
@@ -55,7 +62,7 @@ public class TestBenchHelpers extends ParallelTest {
     /**
      * Returns true if an element can be found from the driver with given
      * selector.
-     * 
+     *
      * @param by
      *            the selector used to find element
      * @return true if the element can be found
@@ -67,6 +74,17 @@ public class TestBenchHelpers extends ParallelTest {
         } catch (Exception e) {
             return false;
         }
+    }
+
+    /**
+     * Simulate DnD of {@code source} element into the {@code target} element.
+     *
+     * @param source
+     * @param target
+     */
+    public void dragAndDrop(WebElement source, WebElement target) {
+        getCommandExecutor().executeScript(LazyDndSimulationLoad.DND_SCRIPT,
+                source, target);
     }
 
     /**
@@ -208,6 +226,7 @@ public class TestBenchHelpers extends ParallelTest {
      *         {@link JavascriptExecutor#executeScript(String, Object...)}
      *         returns
      */
+    @Override
     protected Object executeScript(String script, Object... args) {
         return ((JavascriptExecutor) getDriver()).executeScript(script, args);
     }
@@ -299,12 +318,15 @@ public class TestBenchHelpers extends ParallelTest {
     /**
      * Gets the log entries from the browser that have the given logging level
      * or higher.
-     * 
+     *
      * @param level
      *            the minimum severity of logs included
      * @return log entries from the browser
      */
     protected List<LogEntry> getLogEntries(Level level) {
+        // https://github.com/vaadin/testbench/issues/1233
+        getCommandExecutor().waitForVaadin();
+
         return driver.manage().logs().get(LogType.BROWSER).getAll().stream()
                 .filter(logEntry -> logEntry.getLevel().intValue() >= level
                         .intValue())
@@ -317,14 +339,20 @@ public class TestBenchHelpers extends ParallelTest {
     /**
      * Checks browser's log entries, throws an error for any client-side error
      * and logs any client-side warnings.
-     * 
+     *
+     * @param acceptableMessagePredicate
+     *            allows to ignore log entries whose message is accaptable
+     *
      * @throws AssertionError
      *             if an error is found in the browser logs
      */
-    protected void checkLogsForErrors() {
+    protected void checkLogsForErrors(
+            Predicate<String> acceptableMessagePredicate) {
         getLogEntries(Level.WARNING).forEach(logEntry -> {
-            if (Objects.equals(logEntry.getLevel(), Level.SEVERE)
-                    || logEntry.getMessage().contains("404")) {
+            if ((Objects.equals(logEntry.getLevel(), Level.SEVERE)
+                    || logEntry.getMessage().contains("404"))
+                    && !acceptableMessagePredicate
+                            .test(logEntry.getMessage())) {
                 throw new AssertionError(String.format(
                         "Received error message in browser log console right after opening the page, message: %s",
                         logEntry));
@@ -334,6 +362,17 @@ public class TestBenchHelpers extends ParallelTest {
                         logEntry);
             }
         });
+    }
+
+    /**
+     * Checks browser's log entries, throws an error for any client-side error
+     * and logs any client-side warnings.
+     *
+     * @throws AssertionError
+     *             if an error is found in the browser logs
+     */
+    protected void checkLogsForErrors() {
+        checkLogsForErrors(msg -> false);
     }
 
     private WebElement getShadowRoot(WebElement webComponent) {
@@ -353,5 +392,20 @@ public class TestBenchHelpers extends ParallelTest {
     public void blur() {
         executeScript(
                 "!!document.activeElement ? document.activeElement.blur() : 0");
+    }
+
+    private static class LazyDndSimulationLoad {
+        private static final String DND_SCRIPT = loadDnDEmulation();
+
+        private static String loadDnDEmulation() {
+            InputStream stream = TestBenchHelpers.class
+                    .getResourceAsStream("/dnd-simulation.js");
+            try {
+                return IOUtils.readLines(stream, StandardCharsets.UTF_8)
+                        .stream().collect(Collectors.joining("\n"));
+            } catch (IOException e) {
+                throw new RuntimeException(e);
+            }
+        }
     }
 }

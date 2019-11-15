@@ -16,7 +16,6 @@
 package com.vaadin.flow.plugin.maven;
 
 import java.io.File;
-import java.net.URL;
 import java.util.Collections;
 import java.util.List;
 import java.util.Map;
@@ -25,9 +24,9 @@ import java.util.Set;
 import java.util.stream.Collectors;
 
 import com.github.eirslett.maven.plugins.frontend.lib.ProxyConfig;
-import org.apache.maven.artifact.DependencyResolutionRequiredException;
 import org.apache.maven.execution.MavenSession;
-import org.apache.maven.plugin.AbstractMojo;
+import org.apache.maven.plugin.MojoExecutionException;
+import org.apache.maven.plugin.MojoFailureException;
 import org.apache.maven.plugins.annotations.Component;
 import org.apache.maven.plugins.annotations.LifecyclePhase;
 import org.apache.maven.plugins.annotations.Mojo;
@@ -38,26 +37,24 @@ import org.apache.maven.settings.Proxy;
 import org.apache.maven.settings.crypto.DefaultSettingsDecryptionRequest;
 import org.apache.maven.settings.crypto.SettingsDecrypter;
 import org.apache.maven.settings.crypto.SettingsDecryptionResult;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
 
 import com.vaadin.flow.plugin.common.AnnotationValuesExtractor;
-import com.vaadin.flow.plugin.common.FlowPluginFileUtils;
 import com.vaadin.flow.plugin.common.FrontendDataProvider;
 import com.vaadin.flow.plugin.common.FrontendToolsManager;
 import com.vaadin.flow.plugin.common.RunnerManager;
 import com.vaadin.flow.plugin.production.TranspilationStep;
 
+import static com.vaadin.flow.plugin.common.FlowPluginFrontendUtils.getClassFinder;
+
 /**
  * Goal that prepares all web files from
  * {@link PackageForProductionMojo#transpileEs6SourceDirectory} for production
  * mode: minifies, transpiles and bundles them.
+ *
+ * @since 1.0
  */
 @Mojo(name = "package-for-production", requiresDependencyResolution = ResolutionScope.COMPILE_PLUS_RUNTIME, defaultPhase = LifecyclePhase.PROCESS_CLASSES)
-public class PackageForProductionMojo extends AbstractMojo {
-    private static final Logger LOGGER = LoggerFactory
-            .getLogger(PackageForProductionMojo.class);
-
+public class PackageForProductionMojo extends FlowModeAbstractMojo {
     /**
      * Directory where the source files to use for transpilation are located.
      * <b>Note!</b> This should match <code>copyOutputDirectory</code>
@@ -133,6 +130,14 @@ public class PackageForProductionMojo extends AbstractMojo {
     private File bundleConfiguration;
 
     /**
+     * Set the web components module files output folder name. The default is
+     * <code>vaadin-web-components</code>. The folder is used to generate the
+     * web component module files.
+     */
+    @Parameter(property = "webComponentOutputDirectoryName", defaultValue = "vaadin-web-components")
+    private String webComponentOutputDirectoryName;
+
+    /**
      * Defines the path to node executable to use. If specified,
      * {@code nodeVersion} parameter is ignored.
      */
@@ -141,9 +146,9 @@ public class PackageForProductionMojo extends AbstractMojo {
 
     /**
      * Defines the node version to download and use, if {@code nodePath} is not
-     * set. The default is <code>v8.11.1</code>.
+     * set. The default is <code>v10.16.0</code>.
      */
-    @Parameter(name = "nodeVersion", defaultValue = "v8.11.1")
+    @Parameter(name = "nodeVersion", defaultValue = "v10.16.0")
     private String nodeVersion;
 
     /**
@@ -165,13 +170,20 @@ public class PackageForProductionMojo extends AbstractMojo {
      */
     @Parameter(name = "yarnNetworkConcurrency", defaultValue = "-1")
     private int yarnNetworkConcurrency;
-    
+
     /**
-     * Defines the URL of npm modules. Yarn will use the given NPM registry URL if valid, 
-     * otherwise the default registry will be used.
+     * Defines the URL of npm modules. Yarn will use the given NPM registry URL
+     * if valid, otherwise the default registry will be used.
      */
     @Parameter(property = "npmRegistryURL")
     private String npmRegistryURL;
+
+    /**
+     * If {@code true}, attempts to detect frontend tools (Node, Yarn) in the
+     * system and use them for processing the frontend files.
+     */
+    @Parameter(property = "autodetectTools", defaultValue = "false")
+    private boolean autodetectTools;
 
     /**
      * If <code>false</code> then maven proxies will be used in the
@@ -197,7 +209,15 @@ public class PackageForProductionMojo extends AbstractMojo {
     private MavenProject project;
 
     @Override
-    public void execute() {
+    public void execute() throws MojoExecutionException, MojoFailureException {
+        super.execute();
+
+        // Do nothing when not in compatibility mode
+        if (!compatibility) {
+            getLog().info(
+                    "Skipped `package-for-production` goal because compatibility mode is not set.");
+            return;
+        }
 
         if (transpileOutputDirectory == null) {
             if ("jar".equals(project.getPackaging()) && project.getArtifactMap()
@@ -216,8 +236,9 @@ public class PackageForProductionMojo extends AbstractMojo {
 
         FrontendDataProvider frontendDataProvider = new FrontendDataProvider(
                 bundle, minify, hash, transpileEs6SourceDirectory,
-                new AnnotationValuesExtractor(getProjectClassPathUrls()),
-                bundleConfiguration, getFragmentsData(fragments));
+                new AnnotationValuesExtractor(getClassFinder(project)),
+                bundleConfiguration, webComponentOutputDirectoryName,
+                getFragmentsData(fragments));
 
         FrontendToolsManager frontendToolsManager = new FrontendToolsManager(
                 transpileWorkingDirectory, es5OutputDirectoryName,
@@ -230,17 +251,11 @@ public class PackageForProductionMojo extends AbstractMojo {
     }
 
     private RunnerManager getRunnerManager() {
-      if (nodePath == null || yarnPath == null) {
-        LOGGER.debug(
-            "Either nodePath or yarnPath are not specified, downloading and using standalone ones, node: '{}', yarn: '{}'",
-            nodeVersion, yarnVersion);
-        return new RunnerManager(transpileWorkingDirectory,
-            getProxyConfig(), nodeVersion, yarnVersion, npmRegistryURL);
-      }
-      LOGGER.debug("Using node at path '{}' and yarn at path '{}'",
-          nodePath, yarnPath);
-      return new RunnerManager(transpileWorkingDirectory,
-          getProxyConfig(), nodePath, yarnPath, npmRegistryURL);
+        return new RunnerManager.Builder(transpileWorkingDirectory,
+                getProxyConfig()).versionsToDownload(nodeVersion, yarnVersion)
+                        .localInstallations(nodePath, yarnPath)
+                        .autodetectTools(autodetectTools)
+                        .npmRegistryUrl(npmRegistryURL).build();
     }
 
     private Map<String, Set<String>> getFragmentsData(
@@ -258,19 +273,6 @@ public class PackageForProductionMojo extends AbstractMojo {
                     "Each fragment definition should have a name and list of files to include defined. Got incorrect definition: '%s'",
                     fragment));
         }
-    }
-
-    private URL[] getProjectClassPathUrls() {
-        final List<String> runtimeClasspathElements;
-        try {
-            runtimeClasspathElements = project.getRuntimeClasspathElements();
-        } catch (DependencyResolutionRequiredException e) {
-            throw new IllegalStateException(String.format(
-                    "Failed to retrieve runtime classpath elements from project '%s'",
-                    project), e);
-        }
-        return runtimeClasspathElements.stream().map(File::new)
-                .map(FlowPluginFileUtils::convertToUrl).toArray(URL[]::new);
     }
 
     private ProxyConfig getProxyConfig() {
@@ -298,5 +300,10 @@ public class PackageForProductionMojo extends AbstractMojo {
         return new ProxyConfig.Proxy(proxy.getId(), proxy.getProtocol(),
                 proxy.getHost(), proxy.getPort(), proxy.getUsername(),
                 proxy.getPassword(), proxy.getNonProxyHosts());
+    }
+
+    @Override
+    boolean isDefaultCompatibility() {
+        return true;
     }
 }

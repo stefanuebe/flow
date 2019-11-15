@@ -161,7 +161,7 @@ public class JsonConstants implements Serializable {
 
     /**
      * Key used for data related to
-     * {@link Page#executeJavaScript(String, Serializable...)} in UIDL messages.
+     * {@link Page#executeJs(String, Serializable...)} in UIDL messages.
      */
     public static final String UIDL_KEY_EXECUTE = "execute";
 
@@ -214,6 +214,17 @@ public class JsonConstants implements Serializable {
      * @see #RPC_PUBLISHED_SERVER_EVENT_HANDLER
      */
     public static final String RPC_TEMPLATE_EVENT_ARGS = "templateEventMethodArgs";
+
+    /**
+     * Key used to hold the promise id for a server side method call.
+     */
+    public static final String RPC_TEMPLATE_EVENT_PROMISE = "promise";
+
+    /**
+     * Name of the $server property that is used to track pending promises. The
+     * name is chosen to avoid conflicts with genuine $server method names.
+     */
+    public static final String RPC_PROMISE_CALLBACK_NAME = "}p";
 
     /**
      * Type value for attach existing element server callback.
@@ -269,11 +280,6 @@ public class JsonConstants implements Serializable {
     public static final String META_SESSION_EXPIRED = "sessionExpired";
 
     /**
-     * Key used for storing child template nodes.
-     */
-    public static final String CHILD_TEMPLATE_KEY = "children";
-
-    /**
      * Key holding the debounce phase for an event data map from the client.
      */
     // "for" is a reserved keyword, which means that this cannot be a valid JS
@@ -295,4 +301,28 @@ public class JsonConstants implements Serializable {
      * Character used for representing {@link DebouncePhase#TRAILING}.
      */
     public static final String EVENT_PHASE_TRAILING = "trailing";
+
+    /**
+     * Token used as an event data expression to represent that properties
+     * should be synchronized. The token is chosen to avoid collisions with
+     * regular event data expressions by using a character that cannot be the
+     * start of a valid JS expression.
+     */
+    public static final String SYNCHRONIZE_PROPERTY_TOKEN = "}";
+
+    /**
+     * RPC type value used for return channel messages.
+     */
+    public static final String RPC_TYPE_CHANNEL = "channel";
+
+    /**
+     * Key for the channel id in return channel messages.
+     */
+    public static final String RPC_CHANNEL = "channel";
+
+    /**
+     * Key for the arguments array in return channel messages.
+     */
+    public static final String RPC_CHANNEL_ARGUMENTS = "args";
+
 }

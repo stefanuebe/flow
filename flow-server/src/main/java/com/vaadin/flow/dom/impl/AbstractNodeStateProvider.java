@@ -120,10 +120,9 @@ public abstract class AbstractNodeStateProvider
         ElementChildrenList childrenFeature = getChildrenFeature(node);
         int pos = childrenFeature.indexOf(child.getNode());
         if (pos == -1) {
-            throw new IllegalArgumentException("Not in the list");
+            throw new IllegalArgumentException("Trying to detach an element from parent that does not have it.");
         }
         childrenFeature.remove(pos);
-
     }
 
     @Override
@@ -151,7 +150,7 @@ public abstract class AbstractNodeStateProvider
                     node.getFeature(AttachExistingElementFeature.class)
                             .register(getNode(node), previousSibling,
                                     proposedNode, callback);
-                    ui.getPage().executeJavaScript(
+                    ui.getPage().executeJs(
                             "this.attachExistingElement($0, $1, $2, $3);",
                             getNode(node), previousSibling, tagName,
                             proposedNode.getId());

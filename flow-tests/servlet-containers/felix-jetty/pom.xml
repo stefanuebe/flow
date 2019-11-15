@@ -6,7 +6,7 @@
     <parent>
         <groupId>com.vaadin</groupId>
         <artifactId>flow-servlet-containers-test</artifactId>
-        <version>1.2-SNAPSHOT</version>
+        <version>2.2-SNAPSHOT</version>
     </parent>
 
     <artifactId>flow-test-felix-jetty-server</artifactId>
@@ -15,7 +15,7 @@
 
     <properties>
         <felix.version>6.0.0</felix.version>
-        <felix.distribution>http://central.maven.org/maven2/org/apache/felix/org.apache.felix.main.distribution/${felix.version}/org.apache.felix.main.distribution-${felix.version}.zip</felix.distribution>
+        <felix.distribution>https://repo1.maven.org/maven2/org/apache/felix/org.apache.felix.main.distribution/${felix.version}/org.apache.felix.main.distribution-${felix.version}.zip</felix.distribution>
         <felix.home>felix-framework-${felix.version}</felix.home>
         <jetty.version>9.4.11.v20180605</jetty.version>
         <test.excludegroup>com.vaadin.flow.testcategory.IgnoreOSGi</test.excludegroup>
@@ -38,6 +38,11 @@
         </dependency>
 
         <dependency>
+            <groupId>net.bytebuddy</groupId>
+            <artifactId>byte-buddy</artifactId>
+        </dependency>
+
+        <dependency>
             <groupId>com.vaadin</groupId>
             <artifactId>flow-test-root-context</artifactId>
             <version>${project.version}</version>
@@ -48,7 +53,7 @@
         <dependency>
             <groupId>org.osgi</groupId>
             <artifactId>org.osgi.core</artifactId>
-            <version>6.0.0</version>
+            <version>${osgi.core.version}</version>
         </dependency>
 
         <dependency>
@@ -80,22 +85,16 @@
         </dependency>
 
         <dependency>
-            <groupId>javax.servlet</groupId>
-            <artifactId>javax.servlet-api</artifactId>
-            <version>3.1.0</version>
-        </dependency>
-
-        <dependency>
-            <groupId>org.eclipse.jetty</groupId>
-            <artifactId>jetty-servlet</artifactId>
-            <version>${jetty.version}</version>
+            <groupId>org.apache.felix</groupId>
+            <artifactId>org.apache.felix.http.servlet-api</artifactId>
+            <version>1.1.2</version>
             <scope>provided</scope>
         </dependency>
 
         <dependency>
-            <groupId>org.eclipse.jetty</groupId>
-            <artifactId>jetty-util</artifactId>
-            <version>${jetty.version}</version>
+            <groupId>org.apache.felix</groupId>
+            <artifactId>org.apache.felix.http.jetty</artifactId>
+            <version>4.0.6</version>
             <scope>provided</scope>
         </dependency>
 
@@ -152,47 +151,20 @@
         </dependency>
 
         <dependency>
-            <groupId>org.eclipse.jetty</groupId>
-            <artifactId>jetty-plus</artifactId>
-            <version>${jetty.version}</version>
-            <scope>provided</scope>
+            <groupId>com.vaadin</groupId>
+            <artifactId>flow-html-components-testbench</artifactId>
+            <version>${project.version}</version>
         </dependency>
-
         <dependency>
-            <groupId>org.eclipse.jetty.osgi</groupId>
-            <artifactId>jetty-osgi-boot</artifactId>
-            <version>${jetty.version}</version>
-            <scope>provided</scope>
-            <exclusions>
-                <exclusion>
-                    <groupId>org.eclipse.osgi</groupId>
-                    <artifactId>org.eclipse.osgi</artifactId>
-                </exclusion>
-            </exclusions>
+            <groupId>com.vaadin</groupId>
+            <artifactId>flow-html-components</artifactId>
+            <version>${project.version}</version>
         </dependency>
-
-
         <dependency>
-            <groupId>javax.transaction</groupId>
-            <artifactId>javax.transaction-api</artifactId>
-            <version>1.2</version>
-            <scope>provided</scope>
+            <groupId>com.vaadin</groupId>
+            <artifactId>flow-test-util</artifactId>
+            <version>${project.version}</version>
         </dependency>
-
-        <dependency>
-            <groupId>javax.enterprise</groupId>
-            <artifactId>cdi-api</artifactId>
-            <version>1.2</version>
-            <scope>provided</scope>
-        </dependency>
-
-        <dependency>
-            <groupId>org.apache.servicemix.bundles</groupId>
-            <artifactId>org.apache.servicemix.bundles.javax-inject</artifactId>
-            <version>1_2</version>
-            <scope>provided</scope>
-        </dependency>
-
     </dependencies>
     <build>
         <plugins>
@@ -223,6 +195,9 @@
                                 <unzip
                                     src="${project.build.directory}/felix.zip"
                                     dest="${project.build.directory}"></unzip>
+                                <copy
+                                    file="${basedir}/config.properties"
+                                    todir="${project.build.directory}/${felix.home}/conf"></copy>
                             </tasks>
                         </configuration>
                     </execution>
@@ -244,7 +219,7 @@
                             <outputDirectory>${project.build.directory}/${felix.home}/bundle</outputDirectory>
                             <overWriteIfNewer>true</overWriteIfNewer>
                             <excludeGroupIds>com.google.code.findbugs,
-                                org.seleniumhq.selenium</excludeGroupIds>
+                                org.seleniumhq.selenium, javax.servlet</excludeGroupIds>
                         </configuration>
                     </execution>
                 </executions>
@@ -264,8 +239,8 @@
                             <async>true</async>
                             <asyncDestroyOnShutdown>true</asyncDestroyOnShutdown>
                             <workingDirectory>${project.build.directory}/${felix.home}</workingDirectory>
-                            <commandlineArgs>-Djetty.home=${basedir}/jettyhome
-                                -Dgosh.args="--nointeractive -s"
+                            <commandlineArgs>-Dgosh.args="--nointeractive
+                                -s"
                                 -jar
                                 bin/felix.jar</commandlineArgs>
                         </configuration>

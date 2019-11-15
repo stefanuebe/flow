@@ -31,7 +31,6 @@ import java.util.Locale;
 import java.util.Optional;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.stream.Collectors;
-import java.util.stream.Stream;
 
 import javax.servlet.http.HttpServletResponse;
 
@@ -45,6 +44,7 @@ import org.mockito.Mockito;
 
 import com.vaadin.flow.component.Component;
 import com.vaadin.flow.component.ComponentUtil;
+import com.vaadin.flow.component.HasElement;
 import com.vaadin.flow.component.Html;
 import com.vaadin.flow.component.Tag;
 import com.vaadin.flow.component.UI;
@@ -54,15 +54,18 @@ import com.vaadin.flow.dom.Element;
 import com.vaadin.flow.function.DeploymentConfiguration;
 import com.vaadin.flow.i18n.LocaleChangeEvent;
 import com.vaadin.flow.i18n.LocaleChangeObserver;
+import com.vaadin.flow.internal.CurrentInstance;
 import com.vaadin.flow.router.BeforeLeaveEvent.ContinueNavigationAction;
 import com.vaadin.flow.router.RouterTest.CombinedObserverTarget.Enter;
 import com.vaadin.flow.router.RouterTest.CombinedObserverTarget.Leave;
+import com.vaadin.flow.router.internal.RouteUtil;
 import com.vaadin.flow.server.InvalidRouteConfigurationException;
 import com.vaadin.flow.server.InvalidRouteLayoutConfigurationException;
 import com.vaadin.flow.server.MockVaadinServletService;
 import com.vaadin.flow.server.MockVaadinSession;
 import com.vaadin.flow.server.VaadinService;
 import com.vaadin.flow.server.VaadinSession;
+import com.vaadin.flow.server.startup.ApplicationRouteRegistry;
 import com.vaadin.flow.shared.Registration;
 import com.vaadin.flow.theme.AbstractTheme;
 import com.vaadin.flow.theme.Theme;
@@ -237,7 +240,7 @@ public class RouterTest extends RoutingTestBase {
         @Override
         public void beforeEnter(BeforeEnterEvent event) {
             events.add(event);
-            event.rerouteTo(new NavigationStateBuilder()
+            event.rerouteTo(new NavigationStateBuilder(event.getSource())
                     .withTarget(FooBarNavigationTarget.class).build());
         }
     }
@@ -253,7 +256,7 @@ public class RouterTest extends RoutingTestBase {
             // Note possible loop problem with redirecting on beforeLeave!
             if (events.isEmpty()) {
                 events.add(event);
-                event.rerouteTo(new NavigationStateBuilder()
+                event.rerouteTo(new NavigationStateBuilder(event.getSource())
                         .withTarget(FooBarNavigationTarget.class).build());
             }
         }
@@ -329,6 +332,22 @@ public class RouterTest extends RoutingTestBase {
         @Override
         public void setParameter(BeforeEvent event,
                 @com.vaadin.flow.router.OptionalParameter String parameter) {
+            events.add(event);
+            param = parameter;
+        }
+    }
+
+    @Route("optional")
+    @Tag(Tag.DIV)
+    public static class WithoutOptionalParameter extends Component
+            implements HasUrlParameter<String> {
+
+        private static List<BeforeEvent> events = new ArrayList<>();
+
+        private static String param;
+
+        @Override
+        public void setParameter(BeforeEvent event, String parameter) {
             events.add(event);
             param = parameter;
         }
@@ -670,6 +689,30 @@ public class RouterTest extends RoutingTestBase {
 
     }
 
+    @Route(value = "childWithParameter", layout = RouteParent.class)
+    @Tag(Tag.DIV)
+    public static class RouteChildWithParameter extends Component implements
+            BeforeLeaveObserver, BeforeEnterObserver, HasUrlParameter<String> {
+
+        static List<EventObject> events = new ArrayList<>();
+        static List<String> parameters = new ArrayList<>();
+
+        @Override
+        public void setParameter(BeforeEvent event, String parameter) {
+            parameters.add(parameter);
+        }
+
+        @Override
+        public void beforeEnter(BeforeEnterEvent event) {
+            events.add(event);
+        }
+
+        @Override
+        public void beforeLeave(BeforeLeaveEvent event) {
+            events.add(event);
+        }
+    }
+
     @Route(value = "single", layout = RouteParent.class, absolute = true)
     @Tag(Tag.DIV)
     public static class LoneRoute extends Component
@@ -837,6 +880,24 @@ public class RouterTest extends RoutingTestBase {
                 ErrorParameter<IllegalArgumentException> parameter) {
             // Return faulty status code.
             return 0;
+        }
+    }
+
+    @Route("forwardAndReroute/exception")
+    @Tag(Tag.DIV)
+    public static class ForwardingAndReroutingNavigationTarget extends Component
+            implements BeforeEnterObserver {
+
+        private static List<BeforeEvent> events = new ArrayList<>();
+
+        @Override
+        public void beforeEnter(BeforeEnterEvent event) {
+            events.add(event);
+            event.forwardTo(new NavigationStateBuilder(event.getSource())
+                    .withTarget(FooBarNavigationTarget.class).build());
+
+            event.rerouteTo(new NavigationStateBuilder(event.getSource())
+                    .withTarget(FooBarNavigationTarget.class).build());
         }
     }
 
@@ -1134,6 +1195,27 @@ public class RouterTest extends RoutingTestBase {
     public static class View extends Component {
     }
 
+    @Route(value = "1", layout = NoRemoveLayout.class)
+    @Tag(Tag.DIV)
+    public static class NoRemoveContent1 extends Component {
+
+    }
+
+    @Route(value = "2", layout = NoRemoveLayout.class)
+    @Tag(Tag.DIV)
+    public static class NoRemoveContent2 extends Component {
+
+    }
+
+    @Tag(Tag.DIV)
+    public static class NoRemoveLayout extends Component
+            implements RouterLayout {
+        @Override
+        public void removeRouterLayoutContent(HasElement oldContent) {
+            // Do nothing
+        }
+    }
+
     @Override
     @Before
     public void init() throws NoSuchFieldException, SecurityException,
@@ -1154,8 +1236,7 @@ public class RouterTest extends RoutingTestBase {
 
     @After
     public void tearDown() {
-        UI.setCurrent(null);
-        VaadinService.setCurrent(null);
+        CurrentInstance.clearAll();
     }
 
     @Rule
@@ -1176,6 +1257,19 @@ public class RouterTest extends RoutingTestBase {
         router.navigate(ui, new Location("foo/bar"),
                 NavigationTrigger.PROGRAMMATIC);
         Assert.assertEquals(FooBarNavigationTarget.class, getUIComponent());
+    }
+
+    @Test
+    public void resolveNavigation_pathContainsDots_dotSegmentIsNotParentReference_noException() {
+        router.resolveNavigationTarget("/.../dsfsdfsdf",
+                Collections.emptyMap());
+        // doesn't throw
+    }
+
+    @Test
+    public void resolveNavigation_pathContainsDots_pathIsRelative_noException() {
+        router.resolveNavigationTarget("/../dsfsdfsdf", Collections.emptyMap());
+        // doesn't throw
     }
 
     @Test
@@ -1469,7 +1563,7 @@ public class RouterTest extends RoutingTestBase {
         Assert.assertEquals(
                 "Routing with mismatching parameters should have failed -",
                 HttpServletResponse.SC_INTERNAL_SERVER_ERROR, result);
-        String message = "The navigation target for route 'param' doesn't accept the parameters [hello].";
+        String message = "No route 'param' accepting the parameters [hello] was found.";
         String exceptionText = String.format(EXCEPTION_WRAPPER_MESSAGE,
                 locationString, message);
         assertExceptionComponent(exceptionText);
@@ -1541,7 +1635,7 @@ public class RouterTest extends RoutingTestBase {
         Assert.assertEquals(
                 "Routing with mismatching parameters should have failed -",
                 HttpServletResponse.SC_INTERNAL_SERVER_ERROR, result);
-        String message = "The navigation target for route 'param' doesn't accept the parameters [this, must, work].";
+        String message = "No route 'param' accepting the parameters [this, must, work] was found.";
         String exceptionText = String.format(EXCEPTION_WRAPPER_MESSAGE,
                 locationString, message);
         assertExceptionComponent(exceptionText);
@@ -1561,7 +1655,7 @@ public class RouterTest extends RoutingTestBase {
         Assert.assertEquals(
                 "Routing with mismatching parameters should have failed -",
                 HttpServletResponse.SC_INTERNAL_SERVER_ERROR, result);
-        String message = "The navigation target for route 'param' doesn't accept the parameters [this, must, work].";
+        String message = "No route 'param' accepting the parameters [this, must, work] was found.";
         String exceptionText = String.format(EXCEPTION_WRAPPER_MESSAGE,
                 locationString, message);
         assertExceptionComponent(exceptionText);
@@ -2111,6 +2205,30 @@ public class RouterTest extends RoutingTestBase {
     }
 
     @Test
+    public void forward_and_reroute_at_the_same_time_exception()
+            throws InvalidRouteConfigurationException {
+        String location = "forwardAndReroute/exception";
+
+        FooBarNavigationTarget.events.clear();
+        ForwardingAndReroutingNavigationTarget.events.clear();
+        RootNavigationTarget.events.clear();
+        setNavigationTargets(RootNavigationTarget.class,
+                ForwardingAndReroutingNavigationTarget.class,
+                FooBarNavigationTarget.class);
+
+        router.navigate(ui, new Location(location),
+                NavigationTrigger.PROGRAMMATIC);
+
+        String validationMessage = "Error forward & reroute can not be set at the same time";
+
+        String errorMessage = String.format(
+                "There was an exception while trying to navigate to '%s' with the exception message '%s'",
+                location, validationMessage);
+
+        assertExceptionComponent(InternalServerError.class, errorMessage);
+    }
+
+    @Test
     public void faulty_error_response_code_should_throw_exception()
             throws InvalidRouteConfigurationException {
         setNavigationTargets(RerouteToError.class);
@@ -2173,8 +2291,9 @@ public class RouterTest extends RoutingTestBase {
         ui.navigate("loop");
 
         long historyInvocations = ui.getInternals()
-                .dumpPendingJavaScriptInvocations().stream().filter(js -> js
-                        .getExpression().startsWith("history.pushState"))
+                .dumpPendingJavaScriptInvocations().stream()
+                .filter(js -> js.getInvocation().getExpression()
+                        .startsWith("history.pushState"))
                 .count();
         assertEquals(1, historyInvocations);
 
@@ -2329,6 +2448,10 @@ public class RouterTest extends RoutingTestBase {
     @Test // 3384
     public void theme_is_gotten_from_the_super_class()
             throws InvalidRouteConfigurationException, Exception {
+
+        // Feature enabled only for bower mode
+        Mockito.when(configuration.isCompatibilityMode()).thenReturn(true);
+
         setNavigationTargets(ExtendingView.class);
 
         router.navigate(ui, new Location(""), NavigationTrigger.PROGRAMMATIC);
@@ -2338,6 +2461,22 @@ public class RouterTest extends RoutingTestBase {
         Object themeObject = theme.get(ui.getInternals());
 
         Assert.assertEquals(MyTheme.class, themeObject.getClass());
+    }
+    
+    
+    @Test
+    public void theme_is_not_gotten_from_the_super_class_when_in_npm_mode()
+            throws InvalidRouteConfigurationException, Exception {
+
+        setNavigationTargets(ExtendingView.class);
+
+        router.navigate(ui, new Location(""), NavigationTrigger.PROGRAMMATIC);
+
+        Field theme = UIInternals.class.getDeclaredField("theme");
+        theme.setAccessible(true);
+        Object themeObject = theme.get(ui.getInternals());
+
+        Assert.assertNull(themeObject);
     }
 
     @Test
@@ -2446,13 +2585,12 @@ public class RouterTest extends RoutingTestBase {
     public void getUrl_throws_for_required_parameter()
             throws InvalidRouteConfigurationException {
         expectedEx.expect(IllegalArgumentException.class);
-        expectedEx
-                .expectMessage(String.format(
-                        "Navigation target '%s' requires a parameter and can not be resolved. "
-                                + "Use 'public <T, C extends Component & HasUrlParameter<T>> "
-                                + "String getUrl(Class<? extends C> navigationTarget, T parameter)' "
-                                + "instead",
-                        RouteWithParameter.class.getName()));
+        expectedEx.expectMessage(String.format(
+                "Navigation target '%s' requires a parameter and can not be resolved. "
+                        + "Use 'public <T, C extends Component & HasUrlParameter<T>> "
+                        + "String getUrl(Class<? extends C> navigationTarget, T parameter)' "
+                        + "instead",
+                RouteWithParameter.class.getName()));
         setNavigationTargets(RouteWithParameter.class);
 
         router.getUrl(RouteWithParameter.class);
@@ -2521,7 +2659,7 @@ public class RouterTest extends RoutingTestBase {
     }
 
     @Test
-    public void navaigateWithinOneParent_oneLeaveEventOneEnterEvent()
+    public void navigateWithinOneParent_oneLeaveEventOneEnterEvent()
             throws InvalidRouteConfigurationException {
         setNavigationTargets(RouteChild.class, LoneRoute.class);
 
@@ -2541,7 +2679,7 @@ public class RouterTest extends RoutingTestBase {
     }
 
     @Test
-    public void navaigateWithinOneParent_oneAfterNavigationEventOneEventOnly()
+    public void navigateWithinOneParent_oneAfterNavigationEventOneEventOnly()
             throws InvalidRouteConfigurationException {
         setNavigationTargets(AfterNavigationChild.class,
                 AfterNavigationWithinSameParent.class, LoneRoute.class);
@@ -2598,10 +2736,8 @@ public class RouterTest extends RoutingTestBase {
     @Test // #2754
     public void manually_registered_listeners_should_fire_for_every_navigation()
             throws InvalidRouteConfigurationException {
-        router.getRegistry()
-                .setNavigationTargets(Stream.of(RootNavigationTarget.class,
-                        FooNavigationTarget.class, FooBarNavigationTarget.class)
-                        .collect(Collectors.toSet()));
+        setNavigationTargets(RootNavigationTarget.class,
+                FooNavigationTarget.class, FooBarNavigationTarget.class);
 
         AtomicInteger leaveCount = new AtomicInteger(0);
         AtomicInteger enterCount = new AtomicInteger(0);
@@ -2645,11 +2781,8 @@ public class RouterTest extends RoutingTestBase {
     @Test // #2754
     public void after_navigation_listener_is_only_invoked_once_for_redirect()
             throws InvalidRouteConfigurationException {
-        router.getRegistry()
-                .setNavigationTargets(Stream
-                        .of(ReroutingNavigationTarget.class,
-                                FooBarNavigationTarget.class)
-                        .collect(Collectors.toSet()));
+        setNavigationTargets(ReroutingNavigationTarget.class,
+                FooBarNavigationTarget.class);
 
         AtomicInteger afterCount = new AtomicInteger(0);
 
@@ -2666,11 +2799,8 @@ public class RouterTest extends RoutingTestBase {
     @Test // #2754
     public void before_leave_listener_is_invoked_for_each_redirect()
             throws InvalidRouteConfigurationException {
-        router.getRegistry()
-                .setNavigationTargets(Stream
-                        .of(ReroutingNavigationTarget.class,
-                                FooBarNavigationTarget.class)
-                        .collect(Collectors.toSet()));
+        setNavigationTargets(ReroutingNavigationTarget.class,
+                FooBarNavigationTarget.class);
 
         AtomicInteger leaveCount = new AtomicInteger(0);
         ui.addBeforeLeaveListener(event -> leaveCount.incrementAndGet());
@@ -2686,11 +2816,8 @@ public class RouterTest extends RoutingTestBase {
     @Test // #2754
     public void before_enter_listener_is_invoked_for_each_redirect_when_redirecting_on_before_enter()
             throws InvalidRouteConfigurationException {
-        router.getRegistry()
-                .setNavigationTargets(Stream
-                        .of(ReroutingNavigationTarget.class,
-                                FooBarNavigationTarget.class)
-                        .collect(Collectors.toSet()));
+        setNavigationTargets(ReroutingNavigationTarget.class,
+                FooBarNavigationTarget.class);
 
         AtomicInteger enterCount = new AtomicInteger(0);
         ui.addBeforeEnterListener(event -> enterCount.incrementAndGet());
@@ -2708,10 +2835,8 @@ public class RouterTest extends RoutingTestBase {
             throws InvalidRouteConfigurationException {
         ReroutingOnLeaveNavigationTarget.events.clear();
 
-        router.getRegistry().setNavigationTargets(Stream
-                .of(ReroutingOnLeaveNavigationTarget.class,
-                        FooBarNavigationTarget.class, FooNavigationTarget.class)
-                .collect(Collectors.toSet()));
+        setNavigationTargets(ReroutingOnLeaveNavigationTarget.class,
+                FooBarNavigationTarget.class, FooNavigationTarget.class);
 
         router.navigate(ui, new Location("reroute"),
                 NavigationTrigger.PROGRAMMATIC);
@@ -2736,11 +2861,8 @@ public class RouterTest extends RoutingTestBase {
     public void manual_before_listeners_are_fired_before_observers()
             throws InvalidRouteConfigurationException {
         ManualNavigationTarget.events.clear();
-        router.getRegistry()
-                .setNavigationTargets(Stream
-                        .of(ManualNavigationTarget.class,
-                                FooNavigationTarget.class)
-                        .collect(Collectors.toSet()));
+        setNavigationTargets(ManualNavigationTarget.class,
+                FooNavigationTarget.class);
 
         Registration beforeEnter = ui.addBeforeEnterListener(
                 event -> ManualNavigationTarget.events.add("Manual event"));
@@ -2777,8 +2899,7 @@ public class RouterTest extends RoutingTestBase {
     public void manual_after_listener_is_fired_before_observer()
             throws InvalidRouteConfigurationException {
         AfterNavigationTarget.events.clear();
-        router.getRegistry().setNavigationTargets(
-                Collections.singleton(AfterNavigationTarget.class));
+        setNavigationTargets(AfterNavigationTarget.class);
 
         ui.addAfterNavigationListener(
                 event -> AfterNavigationTarget.events.add("Manual event"));
@@ -2888,7 +3009,7 @@ public class RouterTest extends RoutingTestBase {
 
     private String resolve(Class<?> clazz) {
         Route annotation = clazz.getAnnotation(Route.class);
-        return Router.resolve(clazz, annotation);
+        return RouteUtil.resolve(clazz, annotation);
     }
 
     @Test
@@ -2944,6 +3065,31 @@ public class RouterTest extends RoutingTestBase {
                         .get().getNavigationTarget());
     }
 
+    @Tag("div")
+    @Route("noParent")
+    @RouteAlias(value = "twoParents", layout = BaseLayout.class)
+    public static class AliasLayout extends Component {
+
+    }
+
+    @Test
+    public void alias_has_two_parents_even_if_route_doesnt() {
+        RouteConfiguration.forRegistry(router.getRegistry())
+                .setAnnotatedRoute(AliasLayout.class);
+
+        List<Class<? extends RouterLayout>> parents = router.getRegistry()
+                .getRouteLayouts("noParent", AliasLayout.class);
+
+        Assert.assertTrue("Main route should have no parents.",
+                parents.isEmpty());
+
+        parents = router.getRegistry().getRouteLayouts("twoParents",
+                AliasLayout.class);
+
+        Assert.assertEquals("Route alias should have two parents", 2,
+                parents.size());
+    }
+
     @Test
     public void verify_collisions_not_allowed_with_naming_convention() {
         InvalidRouteConfigurationException exception = null;
@@ -2971,17 +3117,115 @@ public class RouterTest extends RoutingTestBase {
         Assert.assertEquals(ui.getElement(), specialChild.getParent());
     }
 
+    @Test
+    public void noRemoveLayout_oldContentRetained() {
+        setNavigationTargets(NoRemoveContent1.class, NoRemoveContent2.class);
+
+        ui.navigate(NoRemoveContent1.class);
+        NoRemoveLayout layout = (NoRemoveLayout) ui.getChildren().findFirst()
+                .get();
+
+        Assert.assertEquals(Arrays.asList(NoRemoveContent1.class),
+                layout.getChildren().map(Component::getClass)
+                        .collect(Collectors.toList()));
+
+        ui.navigate(NoRemoveContent2.class);
+
+        Assert.assertEquals(
+                Arrays.asList(NoRemoveContent1.class, NoRemoveContent2.class),
+                layout.getChildren().map(Component::getClass)
+                        .collect(Collectors.toList()));
+    }
+
+    @Test // 5388
+    public void layout_chain_is_included_in_before_events() {
+        setNavigationTargets(LoneRoute.class, RouteChildWithParameter.class);
+
+        RouteChildWithParameter.events.clear();
+        ui.navigate(RouteChildWithParameter.class, "foobar");
+
+        BeforeEnterEvent beforeEnterEvent = (BeforeEnterEvent) RouteChildWithParameter.events.get(0);
+        Assert.assertEquals(
+                "There is not exactly one layout in the layout chain", 1,
+                beforeEnterEvent.getLayouts().size());
+        Assert.assertTrue("RouteParent was not included in the layout chain",
+                beforeEnterEvent.getLayouts().contains(RouteParent.class));
+
+        RouteChildWithParameter.events.clear();
+        ui.navigate(LoneRoute.class);
+
+        BeforeLeaveEvent beforeLeaveEvent = (BeforeLeaveEvent) RouteChildWithParameter.events.get(0);
+        Assert.assertEquals(
+                "There is not exactly one layout in the layout chain", 1,
+                beforeLeaveEvent.getLayouts().size());
+        Assert.assertTrue("RouteParent was not included in the layout chain",
+                beforeLeaveEvent.getLayouts().contains(RouteParent.class));
+    }
+
+    @Test
+    public void optional_parameter_non_existing_route()
+    throws InvalidRouteConfigurationException {
+        OptionalParameter.events.clear();
+        Mockito.when(configuration.isProductionMode()).thenReturn(false);
+        setNavigationTargets(OptionalParameter.class);
+
+        String locationString = "optional/doesnotExist/parameter";
+        router.navigate(
+            ui, new Location(locationString), NavigationTrigger.PROGRAMMATIC);
+
+        String exceptionText1 =
+             String.format("Could not navigate to '%s'", locationString);
+
+        String exceptionText2 =
+            String.format("Reason: Couldn't find route for '%s'", locationString);
+
+        String exceptionText3 =
+            "<li><a href=\"optional\">optional (supports optional parameter)</a></li>";
+
+        assertExceptionComponent(
+            RouteNotFoundError.class, exceptionText1, exceptionText2, exceptionText3);
+    }
+
+    @Test
+    public void without_optional_parameter()
+    throws InvalidRouteConfigurationException {
+        OptionalParameter.events.clear();
+        Mockito.when(configuration.isProductionMode()).thenReturn(false);
+        setNavigationTargets(WithoutOptionalParameter.class);
+
+        String locationString = "optional";
+        router.navigate(
+            ui, new Location(locationString), NavigationTrigger.PROGRAMMATIC);
+
+        String exceptionText1 =
+             String.format("Could not navigate to '%s'", locationString);
+
+        String exceptionText2 =
+            String.format("Reason: Couldn't find route for '%s'", locationString);
+
+        String exceptionText3 = "<li>optional (requires parameter)</li>";
+
+        assertExceptionComponent(
+            RouteNotFoundError.class, exceptionText1, exceptionText2, exceptionText3);
+    }
+
     private void setNavigationTargets(
             Class<? extends Component>... navigationTargets)
             throws InvalidRouteConfigurationException {
-        router.getRegistry().setNavigationTargets(
-                new HashSet<>(Arrays.asList(navigationTargets)));
+        RouteConfiguration routeConfiguration = RouteConfiguration
+                .forRegistry(router.getRegistry());
+        routeConfiguration.update(() -> {
+            routeConfiguration.getHandledRegistry().clean();
+            Arrays.asList(navigationTargets)
+                    .forEach(routeConfiguration::setAnnotatedRoute);
+        });
     }
 
     private void setErrorNavigationTargets(
             Class<? extends Component>... errorNavigationTargets) {
-        router.getRegistry().setErrorNavigationTargets(
-                new HashSet<>(Arrays.asList(errorNavigationTargets)));
+        ((ApplicationRouteRegistry) router.getRegistry())
+                .setErrorNavigationTargets(
+                        new HashSet<>(Arrays.asList(errorNavigationTargets)));
     }
 
     private Class<? extends Component> getUIComponent() {

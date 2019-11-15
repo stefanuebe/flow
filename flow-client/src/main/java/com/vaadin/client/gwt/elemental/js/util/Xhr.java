@@ -18,7 +18,6 @@ package com.vaadin.client.gwt.elemental.js.util;
 import com.google.gwt.core.client.JavaScriptException;
 import com.google.gwt.xhr.client.ReadyStateChangeHandler;
 import com.google.gwt.xhr.client.XMLHttpRequest;
-
 import com.vaadin.client.Console;
 
 import elemental.client.Browser;
@@ -28,11 +27,12 @@ import elemental.html.Window;
  * A Simpler way to use {@link XMLHttpRequest}.
  *
  * Copied from the GWT project to make get/post return the XmlHttpRequest
+ *
+ * @since 1.0
  */
 public class Xhr {
     /**
-     * Interface for getting notified when an XHR successfully completes, or
-     * errors out.
+     * Notifies when an XHR successfully completes, or errors out.
      */
     public interface Callback {
         /**
@@ -204,6 +204,7 @@ public class Xhr {
             xhr.setOnReadyStateChange(new Handler(callback));
             xhr.open(method, url);
             xhr.setRequestHeader("Content-type", contentType);
+            xhr.setWithCredentials(true);
             xhr.send(requestData);
         } catch (JavaScriptException e) {
             // Just fail.

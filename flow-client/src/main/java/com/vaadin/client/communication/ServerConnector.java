@@ -28,6 +28,8 @@ import elemental.json.JsonValue;
 /**
  * Handles creating and sending messages to the server using
  * {@link ServerRpcQueue}.
+ *
+ * @since 1.0
  */
 public class ServerConnector {
 
@@ -120,15 +122,21 @@ public class ServerConnector {
      *            the event handler method name to execute on the server side
      * @param argsArray
      *            the arguments array for the method
+     * @param promiseId
+     *            the promise id to use for getting the result back, or -1 if no
+     *            result is expected
      */
     public void sendTemplateEventMessage(StateNode node, String methodName,
-            JsonArray argsArray) {
+            JsonArray argsArray, int promiseId) {
         JsonObject message = Json.createObject();
         message.put(JsonConstants.RPC_TYPE,
                 JsonConstants.RPC_PUBLISHED_SERVER_EVENT_HANDLER);
         message.put(JsonConstants.RPC_NODE, node.getId());
         message.put(JsonConstants.RPC_TEMPLATE_EVENT_METHOD_NAME, methodName);
         message.put(JsonConstants.RPC_TEMPLATE_EVENT_ARGS, argsArray);
+        if (promiseId != -1) {
+            message.put(JsonConstants.RPC_TEMPLATE_EVENT_PROMISE, promiseId);
+        }
         sendMessage(message);
     }
 
@@ -208,6 +216,29 @@ public class ServerConnector {
         message.put(JsonConstants.RPC_ATTACH_REQUESTED_ID, requestedId);
         message.put(JsonConstants.RPC_ATTACH_ASSIGNED_ID, assignedId);
         message.put(JsonConstants.RPC_ATTACH_ID, id);
+
+        sendMessage(message);
+    }
+
+    /**
+     * Sends a return channel message to the server.
+     *
+     * @param stateNodeId
+     *            the id of the state node that owns the channel.
+     * @param channelId
+     *            the id of the channel.
+     * @param arguments
+     *            array of arguments passed to the channel, not
+     *            <code>null</code>.
+     */
+    public void sendReturnChannelMessage(int stateNodeId, int channelId,
+            JsonArray arguments) {
+        JsonObject message = Json.createObject();
+
+        message.put(JsonConstants.RPC_TYPE, JsonConstants.RPC_TYPE_CHANNEL);
+        message.put(JsonConstants.RPC_NODE, stateNodeId);
+        message.put(JsonConstants.RPC_CHANNEL, channelId);
+        message.put(JsonConstants.RPC_CHANNEL_ARGUMENTS, arguments);
 
         sendMessage(message);
     }

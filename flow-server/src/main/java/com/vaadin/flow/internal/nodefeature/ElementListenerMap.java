@@ -24,6 +24,7 @@ import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Set;
 import java.util.function.Function;
 import java.util.stream.Stream;
@@ -33,9 +34,11 @@ import com.vaadin.flow.dom.DisabledUpdateMode;
 import com.vaadin.flow.dom.DomEvent;
 import com.vaadin.flow.dom.DomEventListener;
 import com.vaadin.flow.dom.DomListenerRegistration;
+import com.vaadin.flow.function.SerializableRunnable;
 import com.vaadin.flow.internal.ConstantPoolKey;
 import com.vaadin.flow.internal.JsonUtils;
 import com.vaadin.flow.internal.StateNode;
+import com.vaadin.flow.shared.JsonConstants;
 
 import elemental.json.Json;
 import elemental.json.JsonObject;
@@ -55,6 +58,9 @@ public class ElementListenerMap extends NodeMap {
      */
     public static final String ALWAYS_TRUE_FILTER = "1";
 
+    private static final EnumSet<DebouncePhase> NO_TIMEOUT_PHASES
+            = EnumSet.of(DebouncePhase.LEADING);
+
     // Server-side only data
     private Map<String, List<DomEventListenerWrapper>> listeners;
 
@@ -62,9 +68,6 @@ public class ElementListenerMap extends NodeMap {
         private Map<Integer, Set<DebouncePhase>> debounceSettings = new HashMap<>();
 
         public void addDebouncePhases(int timeout, Set<DebouncePhase> phases) {
-            if (phases == null) {
-                phases = EnumSet.noneOf(DebouncePhase.class);
-            }
             debounceSettings.merge(Integer.valueOf(timeout), phases,
                     (phases1, phases2) -> {
                         EnumSet<DebouncePhase> merge = EnumSet.copyOf(phases1);
@@ -102,12 +105,13 @@ public class ElementListenerMap extends NodeMap {
         private final DomEventListener origin;
         private final ElementListenerMap listenerMap;
 
-        private DisabledUpdateMode mode;
+        private DisabledUpdateMode mode = DisabledUpdateMode.ONLY_WHEN_ENABLED;
         private Set<String> eventDataExpressions;
         private String filter;
 
         private int debounceTimeout = 0;
-        private EnumSet<DebouncePhase> debouncePhases = null;
+        private EnumSet<DebouncePhase> debouncePhases = NO_TIMEOUT_PHASES;
+        private List<SerializableRunnable> unregisterHandlers;
 
         private DomEventListenerWrapper(ElementListenerMap listenerMap,
                 String type, DomEventListener origin) {
@@ -117,8 +121,26 @@ public class ElementListenerMap extends NodeMap {
         }
 
         @Override
+        public String getEventType() {
+            return type;
+        }
+
+        @Override
         public void remove() {
+            if (unregisterHandlers != null) {
+                unregisterHandlers.forEach(SerializableRunnable::run);
+            }
+
             listenerMap.removeListener(type, this);
+
+            // update settings after removal. If we have listeners of the
+            // same type registered, we want to remove settings set by this
+            // particular listener from the overall set
+            // fixes #5090
+            if (listenerMap.listeners != null
+                    && listenerMap.listeners.containsKey(type)) {
+                listenerMap.updateEventSettings(type);
+            }
         }
 
         @Override
@@ -197,7 +219,7 @@ public class ElementListenerMap extends NodeMap {
             debounceTimeout = timeout;
 
             if (timeout == 0) {
-                debouncePhases = null;
+                debouncePhases = NO_TIMEOUT_PHASES;
             } else {
                 debouncePhases = EnumSet.of(firstPhase, additionalPhases);
             }
@@ -207,12 +229,35 @@ public class ElementListenerMap extends NodeMap {
             return this;
         }
 
+        @Override
+        public int getDebounceTimeout() {
+            return debounceTimeout;
+        }
+
+        @Override
+        public Set<DebouncePhase> getDebouncePhases() {
+            return Collections.unmodifiableSet(debouncePhases);
+        }
+
         public boolean matchesPhase(DebouncePhase phase) {
-            if (debouncePhases == null) {
-                return phase == DebouncePhase.LEADING;
-            } else {
-                return debouncePhases.contains(phase);
+            return debouncePhases.contains(phase);
+        }
+
+        @Override
+        public DomListenerRegistration onUnregister(
+                SerializableRunnable unregisterHandler) {
+            if (unregisterHandlers == null) {
+                unregisterHandlers = new ArrayList<>(1);
             }
+            unregisterHandlers.add(Objects.requireNonNull(unregisterHandler,
+                    "Unregister handler cannot be null"));
+            return this;
+        }
+
+        private boolean isPropertySynchronized(String propertyName) {
+            return eventDataExpressions != null && eventDataExpressions
+                    .contains(JsonConstants.SYNCHRONIZE_PROPERTY_TOKEN
+                            + propertyName);
         }
     }
 
@@ -323,22 +368,22 @@ public class ElementListenerMap extends NodeMap {
              * listeners are still notified.
              */
             ensureExpression.apply(ALWAYS_TRUE_FILTER).addDebouncePhases(0,
-                    Collections.singleton(DebouncePhase.LEADING));
+                    NO_TIMEOUT_PHASES);
         }
 
         return expressions;
     }
 
     private void updateEventSettings(String eventType) {
-        Map<String, ExpressionSettings> eventSettings = collectEventExpressions(
-                eventType);
-        JsonObject eventSettingsJson = JsonUtils.createObject(eventSettings,
-                ExpressionSettings::toJson);
+            Map<String, ExpressionSettings> eventSettings = collectEventExpressions(
+                    eventType);
+            JsonObject eventSettingsJson = JsonUtils.createObject(eventSettings,
+                    ExpressionSettings::toJson);
 
-        ConstantPoolKey constantPoolKey = new ConstantPoolKey(
-                eventSettingsJson);
+            ConstantPoolKey constantPoolKey = new ConstantPoolKey(
+                    eventSettingsJson);
 
-        put(eventType, constantPoolKey);
+            put(eventType, constantPoolKey);
     }
 
     private void removeListener(String eventType,
@@ -408,6 +453,29 @@ public class ElementListenerMap extends NodeMap {
     Set<String> getExpressions(String name) {
         assert name != null;
         return collectEventExpressions(name).keySet();
+    }
+
+    /**
+     * Gets the most permissive update mode for any event registration that is
+     * configured to synchronize the given property.
+     *
+     * @param propertyName
+     *            the property name to check, not <code>null</code>
+     * @return the most permissive update mode, or <code>null</code> if
+     *         synchronization is not configured for the given property
+     */
+    public DisabledUpdateMode getPropertySynchronizationMode(
+            String propertyName) {
+        assert propertyName != null;
+
+        if (listeners == null) {
+            return null;
+        }
+
+        return listeners.values().stream().flatMap(List::stream)
+                .filter(wrapper -> wrapper.isPropertySynchronized(propertyName))
+                .map(wrapper -> wrapper.mode)
+                .reduce(DisabledUpdateMode::mostPermissive).orElse(null);
     }
 
 }

@@ -17,9 +17,14 @@ package com.vaadin.flow.router.internal;
 
 import java.util.ArrayDeque;
 import java.util.ArrayList;
+import java.util.Collection;
 import java.util.Deque;
+import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Optional;
+import java.util.Set;
+import java.util.stream.Collectors;
 
 import javax.servlet.http.HttpServletResponse;
 
@@ -27,6 +32,8 @@ import com.vaadin.flow.component.Component;
 import com.vaadin.flow.component.HasElement;
 import com.vaadin.flow.component.UI;
 import com.vaadin.flow.di.Instantiator;
+import com.vaadin.flow.dom.Element;
+import com.vaadin.flow.internal.Pair;
 import com.vaadin.flow.internal.ReflectTools;
 import com.vaadin.flow.router.AfterNavigationEvent;
 import com.vaadin.flow.router.BeforeEnterEvent;
@@ -38,15 +45,19 @@ import com.vaadin.flow.router.BeforeLeaveObserver;
 import com.vaadin.flow.router.ErrorNavigationEvent;
 import com.vaadin.flow.router.ErrorParameter;
 import com.vaadin.flow.router.EventUtil;
+import com.vaadin.flow.router.HasDynamicTitle;
 import com.vaadin.flow.router.Location;
 import com.vaadin.flow.router.LocationChangeEvent;
 import com.vaadin.flow.router.NavigationEvent;
 import com.vaadin.flow.router.NavigationHandler;
 import com.vaadin.flow.router.NavigationState;
 import com.vaadin.flow.router.NavigationTrigger;
-import com.vaadin.flow.router.Route;
+import com.vaadin.flow.router.PageTitle;
+import com.vaadin.flow.router.PreserveOnRefresh;
+import com.vaadin.flow.router.RouteConfiguration;
 import com.vaadin.flow.router.Router;
 import com.vaadin.flow.router.RouterLayout;
+import com.vaadin.flow.server.VaadinSession;
 
 /**
  * Base class for navigation handlers that target a navigation state.
@@ -57,7 +68,7 @@ import com.vaadin.flow.router.RouterLayout;
 public abstract class AbstractNavigationStateRenderer
         implements NavigationHandler {
     private enum TransitionOutcome {
-        FINISHED, REROUTED, POSTPONED
+        FORWARDED, FINISHED, REROUTED, POSTPONED
     }
 
     private static List<Integer> statusCodes = ReflectTools
@@ -123,18 +134,17 @@ public abstract class AbstractNavigationStateRenderer
         Class<? extends Component> routeTargetType = navigationState
                 .getNavigationTarget();
         List<Class<? extends RouterLayout>> routeLayoutTypes = getRouterLayoutTypes(
-                routeTargetType);
+                routeTargetType, ui.getRouter());
 
         assert routeTargetType != null;
         assert routeLayoutTypes != null;
 
         clearContinueNavigationAction(ui);
-        RouterUtil.checkForDuplicates(routeTargetType, routeLayoutTypes);
+        checkForDuplicates(routeTargetType, routeLayoutTypes);
 
         if (eventActionsSupported()) {
-
             BeforeLeaveEvent beforeNavigationDeactivating = new BeforeLeaveEvent(
-                    event, routeTargetType);
+                    event, routeTargetType, routeLayoutTypes);
 
             Deque<BeforeLeaveHandler> leaveHandlers;
             if (postponed != null) {
@@ -152,9 +162,15 @@ public abstract class AbstractNavigationStateRenderer
             TransitionOutcome transitionOutcome = executeBeforeLeaveNavigation(
                     beforeNavigationDeactivating, leaveHandlers);
 
+            if (transitionOutcome == TransitionOutcome.FORWARDED) {
+                return forward(event, beforeNavigationDeactivating);
+            }
+
             if (transitionOutcome == TransitionOutcome.REROUTED) {
                 return reroute(event, beforeNavigationDeactivating);
-            } else if (transitionOutcome == TransitionOutcome.POSTPONED) {
+            }
+
+            if (transitionOutcome == TransitionOutcome.POSTPONED) {
                 ContinueNavigationAction currentAction = beforeNavigationDeactivating
                         .getContinueNavigationAction();
                 currentAction.setReferences(this, event);
@@ -164,19 +180,34 @@ public abstract class AbstractNavigationStateRenderer
             }
         }
 
-        Component componentInstance = getRouteTarget(routeTargetType, event);
-        List<HasElement> chain = new ArrayList<>();
-        chain.add(componentInstance);
+        final ArrayList<HasElement> chain;
 
-        for (Class<? extends RouterLayout> parentType : routeLayoutTypes) {
-            chain.add(getRouteTarget(parentType, event));
+        if (isPreserveOnRefreshTarget(routeTargetType, routeLayoutTypes)) {
+            final Optional<ArrayList<HasElement>> maybeChain =
+                    createOrRehandlePreserveOnRefreshComponent(event);
+            if (!maybeChain.isPresent()) {
+                return HttpServletResponse.SC_OK;
+            } else {
+                chain = maybeChain.get();
+            }
+        } else {
+            // Non-preserving component, create fresh chain
+            chain = createChain(event);
+
+            // Has any preserved components already been created here? If so,
+            // we don't want to navigate back to them ever so clear cache for
+            // window.
+            clearAllPreservedChains(ui);
         }
 
-        BeforeEnterEvent beforeNavigationActivating = new BeforeEnterEvent(
-                event, routeTargetType);
+        final Component componentInstance = (Component) chain.get(0);
 
-        LocationChangeEvent locationChangeEvent = RouterUtil.createEvent(event,
-                chain);
+        BeforeEnterEvent beforeNavigationActivating = new BeforeEnterEvent(
+                event, routeTargetType, routeLayoutTypes);
+
+        LocationChangeEvent locationChangeEvent = new LocationChangeEvent(
+                event.getSource(), event.getUI(), event.getTrigger(),
+                event.getLocation(), chain);
 
         notifyNavigationTarget(componentInstance, event,
                 beforeNavigationActivating, locationChangeEvent);
@@ -197,6 +228,11 @@ public abstract class AbstractNavigationStateRenderer
                 beforeNavigationActivating, enterHandlers);
 
         if (eventActionsSupported()
+                && TransitionOutcome.FORWARDED.equals(transitionOutcome)) {
+            return forward(event, beforeNavigationActivating);
+        }
+
+        if (eventActionsSupported()
                 && TransitionOutcome.REROUTED.equals(transitionOutcome)) {
             return reroute(event, beforeNavigationActivating);
         }
@@ -205,7 +241,7 @@ public abstract class AbstractNavigationStateRenderer
                 navigationState.getResolvedPath(), componentInstance,
                 routerLayouts);
 
-        RouterUtil.updatePageTitle(event, componentInstance);
+        updatePageTitle(event, componentInstance);
 
         int statusCode = locationChangeEvent.getStatusCode();
         validateStatusCode(statusCode, routeTargetType);
@@ -247,12 +283,14 @@ public abstract class AbstractNavigationStateRenderer
      *
      * @param routeTargetType
      *            component type that will be shown
+     * @param router
+     *            used router instance
      *
      * @return a list of parent {@link RouterLayout} types, not
      *         <code>null</code>
      */
     protected abstract List<Class<? extends RouterLayout>> getRouterLayoutTypes(
-            Class<? extends Component> routeTargetType);
+            Class<? extends Component> routeTargetType, Router router);
 
     /**
      * Checks whether this renderer should reroute or postpone navigation based
@@ -263,6 +301,22 @@ public abstract class AbstractNavigationStateRenderer
      *         otherwise.
      */
     protected abstract boolean eventActionsSupported();
+
+    // The first element in the returned list is always a Component
+    private ArrayList<HasElement> createChain(NavigationEvent event) {
+        final Class<? extends Component> routeTargetType = navigationState
+                .getNavigationTarget();
+        final List<Class<? extends RouterLayout>> routeLayoutTypes =
+                getRouterLayoutTypes(routeTargetType,
+                        event.getUI().getRouter());
+
+        final ArrayList<HasElement> chain = new ArrayList<>();
+        chain.add(getRouteTarget(routeTargetType, event));
+        for (Class<? extends RouterLayout> parentType : routeLayoutTypes) {
+            chain.add(getRouteTarget(parentType, event));
+        }
+        return chain;
+    }
 
     private void clearContinueNavigationAction(UI ui) {
         storeContinueNavigationAction(ui, null);
@@ -302,6 +356,11 @@ public abstract class AbstractNavigationStateRenderer
             BeforeLeaveHandler listener = leaveHandlers.remove();
             listener.beforeLeave(beforeNavigation);
 
+            validateBeforeEvent(beforeNavigation);
+            if (beforeNavigation.hasForwardTarget()) {
+                return TransitionOutcome.FORWARDED;
+            }
+
             if (beforeNavigation.hasRerouteTarget()) {
                 return TransitionOutcome.REROUTED;
             } else if (beforeNavigation.isPostponed()) {
@@ -328,12 +387,28 @@ public abstract class AbstractNavigationStateRenderer
 
         for (BeforeEnterHandler eventHandler : enterHandlers) {
             eventHandler.beforeEnter(beforeNavigation);
+            validateBeforeEvent(beforeNavigation);
+
+            if (beforeNavigation.hasForwardTarget()) {
+                return TransitionOutcome.FORWARDED;
+            }
 
             if (beforeNavigation.hasRerouteTarget()) {
                 return TransitionOutcome.REROUTED;
             }
         }
         return TransitionOutcome.FINISHED;
+    }
+
+    private int forward(NavigationEvent event, BeforeEvent beforeNavigation) {
+        NavigationHandler handler = beforeNavigation.getForwardTarget();
+
+        NavigationEvent newNavigationEvent = getNavigationEvent(event,
+                beforeNavigation);
+        newNavigationEvent.getUI().getPage().getHistory().replaceState(null,
+                newNavigationEvent.getLocation());
+
+        return handler.handle(newNavigationEvent);
     }
 
     private int reroute(NavigationEvent event, BeforeEvent beforeNavigation) {
@@ -356,12 +431,92 @@ public abstract class AbstractNavigationStateRenderer
                     NavigationTrigger.PROGRAMMATIC, errorParameter);
         }
 
-        final Class<?> routeTargetType = beforeNavigation.getRouteTargetType();
-        Location location = new Location(Router.resolve(routeTargetType, routeTargetType
-                .getAnnotation(Route.class)));
+        Class<? extends Component> targetType;
+        if (beforeNavigation.hasForwardTarget()) {
+            targetType = beforeNavigation.getForwardTargetType();
+        } else {
+            targetType = beforeNavigation.getRouteTargetType();
+        }
+
+        Location location = new Location(RouteConfiguration
+                .forRegistry(event.getSource().getRegistry())
+                .getUrlBase(targetType)
+                .orElseThrow(() -> new IllegalStateException(String.format(
+                        "The target component '%s' has no registered route",
+                        targetType))));
+
+        if (beforeNavigation.hasForwardTarget()) {
+            List<String> segments = new ArrayList<>(location.getSegments());
+            segments.addAll(beforeNavigation.getForwardTargetParameters());
+            location = new Location(segments);
+        }
 
         return new NavigationEvent(event.getSource(), location, event.getUI(),
                 NavigationTrigger.PROGRAMMATIC);
+    }
+
+    /**
+     * Creates a new instance of the target component for the route when the
+     * target class is annotated with @PreserveOnRefresh. It checks if there
+     * exists a cached component of the route location in the current window.
+     * If retrieving the window name requires another round-trip, schedule it
+     * and make a new call to the handle {@link #handle(NavigationEvent)} in
+     * the callback. In this case, this method returns {@link Optional#empty()}.
+     */
+    private Optional<ArrayList<HasElement>> createOrRehandlePreserveOnRefreshComponent(
+            NavigationEvent event) {
+        final Location location = event.getLocation();
+        final UI ui = event.getUI();
+        final VaadinSession session = ui.getSession();
+
+        final ArrayList<HasElement> chain;
+
+        if (ui.getInternals().getExtendedClientDetails() == null) {
+            if (hasPreservedChainOfLocation(session, location)) {
+                // We may have a cached instance for this location, but we
+                // need to retrieve the window name before we can determine
+                // this, so execute a client-side request.
+                ui.getPage().retrieveExtendedClientDetails(details ->
+                        handle(event));
+                return Optional.empty();
+            } else {
+                // We can immediately create the new component instance and
+                // route to it. But we also want to retrieve the window
+                // name in order to cache the component for later potential
+                // refreshes.
+                chain = createChain(event);
+                ui.getPage().retrieveExtendedClientDetails(details -> {
+                    final String windowName = ui.getInternals()
+                            .getExtendedClientDetails().getWindowName();
+                    setPreservedChain(session, windowName, location, chain);
+                });
+            }
+        } else {
+            final String windowName = ui.getInternals()
+                    .getExtendedClientDetails().getWindowName();
+            final Optional<ArrayList<HasElement>> maybePreserved =
+                    getPreservedChain(session, windowName, event.getLocation());
+            if (maybePreserved.isPresent()) {
+                // Re-use preserved chain for this route
+                chain = maybePreserved.get();
+                final HasElement root = chain.get(chain.size()-1);
+                final Component component = (Component) chain.get(0);
+                final Optional<UI> maybePrevUI = component.getUI();
+
+                // Remove the top-level component from the tree
+                root.getElement().removeFromTree();
+
+                // Transfer all remaining UI child elements (typically dialogs
+                // and notifications) to the new UI
+                maybePrevUI.ifPresent(prevUi ->
+                        moveElementsToNewUI(prevUi, ui));
+            } else {
+                // Instantiate new chain for the route
+                chain = createChain(event);
+                setPreservedChain(session, windowName, location, chain);
+            }
+        }
+        return Optional.of(chain);
     }
 
     private static void validateStatusCode(int statusCode,
@@ -374,4 +529,123 @@ public abstract class AbstractNavigationStateRenderer
         }
     }
 
+    private static void validateBeforeEvent(BeforeEvent event) {
+        if (event.hasForwardTarget() && event.hasRerouteTarget()) {
+            throw new IllegalStateException(
+                    "Error forward & reroute can not be set at the same time");
+        }
+    }
+
+    private static void checkForDuplicates(
+            Class<? extends Component> routeTargetType,
+            Collection<Class<? extends RouterLayout>> routeLayoutTypes) {
+        Set<Class<?>> duplicateCheck = new HashSet<>();
+        duplicateCheck.add(routeTargetType);
+        for (Class<?> parentType : routeLayoutTypes) {
+            if (!duplicateCheck.add(parentType)) {
+                throw new IllegalArgumentException(
+                        parentType + " is used in multiple locations");
+            }
+        }
+    }
+
+    private static void updatePageTitle(NavigationEvent navigationEvent,
+            Component routeTarget) {
+        String title;
+
+        if (routeTarget instanceof HasDynamicTitle) {
+            title = ((HasDynamicTitle) routeTarget).getPageTitle();
+        } else {
+            title = lookForTitleInTarget(routeTarget).map(PageTitle::value)
+                    .orElse("");
+        }
+        navigationEvent.getUI().getPage().setTitle(title);
+    }
+
+    private static Optional<PageTitle> lookForTitleInTarget(
+            Component routeTarget) {
+        return Optional.ofNullable(
+                routeTarget.getClass().getAnnotation(PageTitle.class));
+    }
+
+    private static boolean isPreserveOnRefreshTarget(
+            Class<? extends Component> routeTargetType,
+            List<Class<? extends RouterLayout>> routeLayoutTypes) {
+        return routeTargetType.isAnnotationPresent(PreserveOnRefresh.class)
+                || routeLayoutTypes.stream().anyMatch(layoutType ->
+                layoutType.isAnnotationPresent(PreserveOnRefresh.class)
+        );
+    }
+
+    private void moveElementsToNewUI(UI prevUi, UI newUi) {
+        final List<Element> uiChildren = prevUi.getElement()
+                .getChildren()
+                .collect(Collectors.toList());
+        uiChildren.forEach(element -> {
+            element.removeFromTree();
+            newUi.getElement().appendChild(element);
+        });
+    }
+
+    // maps window.name to (location, chain)
+    private static class PreservedComponentCache extends
+            HashMap<String, Pair<String, ArrayList<HasElement>>> {
+    }
+
+    static boolean hasPreservedChain(VaadinSession session) {
+        final PreservedComponentCache cache =
+                session.getAttribute(PreservedComponentCache.class);
+        return cache!=null && !cache.isEmpty();
+    }
+
+    static boolean hasPreservedChainOfLocation(
+            VaadinSession session, Location location) {
+        final PreservedComponentCache cache =
+                session.getAttribute(PreservedComponentCache.class);
+        return cache != null &&
+                cache.values().stream().anyMatch(entry ->
+                        entry.getFirst().equals(location.getPath()));
+    }
+
+    static Optional<ArrayList<HasElement>> getPreservedChain(
+            VaadinSession session, String windowName, Location location) {
+        final PreservedComponentCache cache =
+                session.getAttribute(PreservedComponentCache.class);
+        if (cache!=null && cache.containsKey(windowName) &&
+                cache.get(windowName).getFirst().equals(location.getPath())) {
+            return Optional.of(cache.get(windowName).getSecond());
+        } else {
+            return Optional.empty();
+        }
+    }
+
+    static void setPreservedChain(VaadinSession session, String windowName,
+                                  Location location,
+                                  ArrayList<HasElement> chain) {
+        PreservedComponentCache cache =
+                session.getAttribute(PreservedComponentCache.class);
+        if (cache == null) {
+            cache = new PreservedComponentCache();
+        }
+        cache.put(windowName, new Pair<>(location.getPath(), chain));
+        session.setAttribute(PreservedComponentCache.class, cache);
+    }
+
+
+    private static void clearAllPreservedChains(UI ui) {
+        final VaadinSession session = ui.getSession();
+        // Note that this check is always false if @PreserveOnRefresh has not
+        // been used at all, avoiding the round-trip overhead.
+        if (hasPreservedChain(session)) {
+            ui.getPage().retrieveExtendedClientDetails(details -> {
+                final String windowName = ui.getInternals()
+                        .getExtendedClientDetails().getWindowName();
+                final PreservedComponentCache cache =
+                        session.getAttribute(PreservedComponentCache.class);
+                if (cache != null) {
+                    cache.remove(windowName);
+                }
+            });
+        }
+    }
 }

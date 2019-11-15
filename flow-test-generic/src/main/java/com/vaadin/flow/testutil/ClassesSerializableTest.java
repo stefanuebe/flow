@@ -25,6 +25,7 @@ import java.io.ObjectOutputStream;
 import java.io.Serializable;
 import java.lang.reflect.Constructor;
 import java.lang.reflect.Field;
+import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
 import java.lang.reflect.Modifier;
 import java.lang.reflect.Type;
@@ -45,10 +46,9 @@ import org.junit.Test;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import static java.lang.reflect.Modifier.isStatic;
 import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.fail;
-
-import static java.lang.reflect.Modifier.isStatic;
 
 /**
  * A superclass for serialization testing. The test scans all the classpath and
@@ -56,22 +56,30 @@ import static java.lang.reflect.Modifier.isStatic;
  * classpath. Subclasses may adjust the whitelist by overriding
  * {@link #getExcludedPatterns()}, {@link #getBasePackages()},
  * {@link #getJarPattern()}
+ *
+ * @since 1.0
  */
 
 public abstract class ClassesSerializableTest {
 
     private final Logger logger = LoggerFactory.getLogger(getClass());
 
+    private final Class<?> COMPONENT_CLASS = loadComponent(
+            "com.vaadin.flow.component.Component");
+    private final Class<?> DIV_CLASS = loadComponent(
+            "com.vaadin.flow.component.html.Div");
+
+    private final Class<?> UI_CLASS = loadComponent(
+            "com.vaadin.flow.component.UI");
+
     @SuppressWarnings("WeakerAccess")
     protected Stream<String> getExcludedPatterns() {
         return Stream.of(
                 "com\\.vaadin\\.flow\\.data\\.validator\\.BeanValidator\\$LazyFactoryInitializer",
                 "com\\.vaadin\\.flow\\.internal\\.BeanUtil\\$LazyValidationAvailability",
-                ".*\\.slf4j\\..*",
-                ".*\\.testbench\\..*",
-                ".*\\.testutil\\..*",
-                ".*\\.demo\\..*",
-                "com\\.vaadin\\..*Util(s)?(\\$\\w+)?$", //Various utils with inner classes
+                ".*\\.slf4j\\..*", ".*\\.testbench\\..*", ".*\\.testutil\\..*",
+                // Various utils with inner classes
+                ".*\\.demo\\..*", "com\\.vaadin\\..*Util(s)?(\\$\\w+)?$",
 
                 "com\\.vaadin\\.flow\\.data\\.provider\\.InMemoryDataProviderHelpers",
                 "com\\.vaadin\\.flow\\.dom\\.ElementConstants",
@@ -80,7 +88,12 @@ public abstract class ClassesSerializableTest {
                 "com\\.vaadin\\.flow\\.component\\.textfield\\.SlotHelpers",
                 "com\\.vaadin\\.flow\\.component\\.orderedlayout\\.FlexConstants",
                 "com\\.vaadin\\.flow\\.component\\.polymertemplate\\.DefaultTemplateParser",
+                "com\\.vaadin\\.flow\\.component\\.polymertemplate\\.NpmTemplateParser",
+                "com\\.vaadin\\.flow\\.component\\.polymertemplate\\.BundleParser",
+                "com\\.vaadin\\.flow\\.component\\.polymertemplate\\.BundleParser\\$DependencyVisitor",
                 "com\\.vaadin\\.flow\\.component\\.PropertyDescriptors(\\$.*)?",
+                "com\\.vaadin\\.flow\\.component\\.Shortcuts",
+                "com\\.vaadin\\.flow\\.component\\.dnd\\.osgi\\.DndConnectorResource",
                 "com\\.vaadin\\.flow\\.internal\\.JsonSerializer",
                 "com\\.vaadin\\.flow\\.internal\\.JsonCodec",
                 "com\\.vaadin\\.flow\\.internal\\.UsageStatistics(\\$.*)?",
@@ -99,8 +112,11 @@ public abstract class ClassesSerializableTest {
                 "com\\.vaadin\\.flow\\.server\\.VaadinServletRequest",
                 "com\\.vaadin\\.flow\\.server\\.VaadinServletResponse",
                 "com\\.vaadin\\.flow\\.server\\.startup\\.AnnotationValidator",
+                "com\\.vaadin\\.flow\\.server\\.startup\\.ApplicationRouteRegistry\\$RouteRegistryServletContextListener",
                 "com\\.vaadin\\.flow\\.server\\.startup\\.ServletDeployer",
+                "com\\.vaadin\\.flow\\.server\\.startup\\.ServletDeployer\\$StubServletConfig",
                 "com\\.vaadin\\.flow\\.server\\.startup\\.ServletContextListeners",
+                "com\\.vaadin\\.flow\\.server\\.startup\\.DevModeInitializer(\\$.*)?",
                 "com\\.vaadin\\.flow\\.server\\.communication.JSR356WebsocketInitializer(\\$.*)?",
                 "com\\.vaadin\\.flow\\.server\\.BootstrapHandler(\\$.*)?",
                 "com\\.vaadin\\.flow\\.server\\.BootstrapPageResponse",
@@ -115,13 +131,17 @@ public abstract class ClassesSerializableTest {
                 "com\\.vaadin\\.flow\\.server\\.startup\\.ErrorNavigationTargetInitializer",
                 "com\\.vaadin\\.flow\\.server\\.startup\\.ServletVerifier",
                 "com\\.vaadin\\.flow\\.server\\.startup\\.RouteRegistryInitializer",
+                "com\\.vaadin\\.flow\\.server\\.startup\\.WebComponentConfigurationRegistryInitializer",
                 "com\\.vaadin\\.flow\\.server\\.VaadinResponse",
                 "com\\.vaadin\\.flow\\.component\\.Key",
                 "com\\.vaadin\\.flow\\.server\\.VaadinRequest",
+                "com\\.vaadin\\.flow\\.server\\.DevServerWatchDog(\\$.*)?",
                 "com\\.vaadin\\.flow\\.router\\.RouteNotFoundError\\$LazyInit",
                 "com\\.vaadin\\.flow\\.component\\.polymertemplate\\.TemplateDataAnalyzer\\$.*",
-                "com\\.vaadin\\.flow\\.component\\.HtmlComponent",// De-facto abstract class
-                "com\\.vaadin\\.flow\\.component\\.HtmlContainer",// De-facto abstract class
+                // De-facto abstract class
+                "com\\.vaadin\\.flow\\.component\\.HtmlComponent",
+                // De-facto abstract class
+                "com\\.vaadin\\.flow\\.component\\.HtmlContainer",
                 "com\\.vaadin\\.flow\\.component\\.polymertemplate\\.TemplateInitializer(\\$.*)?",
                 "com\\.vaadin\\.flow\\.component\\.polymertemplate\\.TemplateParser(\\$.*)?",
                 "com\\.vaadin\\.flow\\.dom\\.impl\\.ThemeListImpl\\$ThemeListIterator",
@@ -129,6 +149,7 @@ public abstract class ClassesSerializableTest {
                 "com\\.vaadin\\.flow\\.internal\\.ReflectionCache",
                 "com\\.vaadin\\.flow\\.component\\.internal\\.ComponentMetaData(\\$.*)?",
                 "com\\.vaadin\\.flow\\.component\\.polymertemplate\\.TemplateDataAnalyzer",
+                "com\\.vaadin\\.flow\\.component\\.polymertemplate\\.IdCollector",
                 "com\\.vaadin\\.flow\\.dom\\.ElementFactory",
                 "com\\.vaadin\\.flow\\.dom\\.NodeVisitor",
                 "com\\.vaadin\\.flow\\.internal\\.nodefeature\\.NodeList(\\$.*)?",
@@ -136,12 +157,35 @@ public abstract class ClassesSerializableTest {
                 "com\\.vaadin\\.flow\\.internal\\.ReflectTools(\\$.*)?",
                 "com\\.vaadin\\.flow\\.server\\.FutureAccess",
                 "com\\.vaadin\\.flow\\.internal\\.nodefeature\\.ElementPropertyMap\\$PutResult",
-                "com\\.vaadin\\.flow\\.osgi\\.Activator",
+                "com\\.vaadin\\.flow\\.client\\.osgi\\.OSGiClientStaticResource(\\$.*)?",
+                "com\\.vaadin\\.flow\\.osgi\\.support\\.OsgiVaadinContributor(\\$.*)?",
+                "com\\.vaadin\\.flow\\.osgi\\.support\\.OsgiVaadinStaticResource(\\$.*)?",
+                "com\\.vaadin\\.flow\\.osgi\\.support\\.VaadinResourceTrackerComponent(\\$.*)?",
+                "com\\.vaadin\\.flow\\.client\\.osgi\\..*",
+                "com\\.vaadin\\.flow\\.data\\.osgi\\..*",
+                "com\\.vaadin\\.flow\\.push\\.osgi\\.PushOsgiStaticResource",
                 "com\\.vaadin\\.flow\\.component\\.internal\\.HtmlImportParser",
+                "com\\.vaadin\\.flow\\.server\\.webcomponent\\.WebComponentGenerator",
+                "com\\.vaadin\\.flow\\.server\\.communication\\.WebComponentBootstrapHandler(\\$.*)?",
 
-                //Various test classes
-                ".*\\.test(s)?\\..*",
-                ".*Test.*",
+                // Frontend tasks classes which are not stored anywhere but used
+                // only once
+                "com\\.vaadin\\.flow\\.server\\.frontend\\.scanner\\..*",
+                "com\\.vaadin\\.flow\\.server\\.frontend\\.JarContentsManager",
+                "com\\.vaadin\\.flow\\.server\\.frontend\\.AbstractUpdateImports",
+                "com\\.vaadin\\.flow\\.server\\.frontend\\.FallibleCommand",
+                "com\\.vaadin\\.flow\\.server\\.frontend\\.NodeTasks",
+                "com\\.vaadin\\.flow\\.server\\.frontend\\.NodeUpdater",
+                "com\\.vaadin\\.flow\\.server\\.frontend\\.TaskCopyFrontendFiles",
+                "com\\.vaadin\\.flow\\.server\\.frontend\\.TaskCopyLocalFrontendFiles",
+                "com\\.vaadin\\.flow\\.server\\.frontend\\.TaskCreatePackageJson",
+                "com\\.vaadin\\.flow\\.server\\.frontend\\.TaskRunNpmInstall",
+                "com\\.vaadin\\.flow\\.server\\.frontend\\.TaskUpdateImports(\\$.*)?",
+                "com\\.vaadin\\.flow\\.server\\.frontend\\.TaskUpdatePackages",
+                "com\\.vaadin\\.flow\\.server\\.frontend\\.TaskUpdateWebpack",
+
+                // Various test classes
+                ".*\\.test(s)?\\..*", ".*Test.*",
                 "com\\.vaadin\\.flow\\.server\\.MockVaadinServletService",
                 "com\\.vaadin\\.flow\\.server\\.MockServletServiceSessionSetup",
                 "com\\.vaadin\\.flow\\.server\\.MockServletConfig",
@@ -186,7 +230,7 @@ public abstract class ClassesSerializableTest {
     /**
      * The method is called right after a class instantiation and might be
      * overriden by subclasses to reset thread local values (ex. current UI).
-     * 
+     *
      * @see #setupThreadLocals
      */
     @SuppressWarnings("WeakerAccess")
@@ -197,7 +241,7 @@ public abstract class ClassesSerializableTest {
      * The method is called right a class instantiation and might be overriden
      * by subclasses to install some necessary thread local values (ex. current
      * UI).
-     * 
+     *
      * @see #resetThreadLocals
      */
     @SuppressWarnings("WeakerAccess")
@@ -336,6 +380,7 @@ public abstract class ClassesSerializableTest {
             if (!cls.isInterface()
                     && !Modifier.isAbstract(cls.getModifiers())) {
                 serializeAndDeserialize(cls);
+                serializeAndDeserializeInsideContainer(cls);
             }
 
             // report non-serializable classes and interfaces
@@ -359,23 +404,63 @@ public abstract class ClassesSerializableTest {
 
     private void serializeAndDeserialize(Class<?> clazz) {
         try {
-            Optional<Constructor<?>> defaultCtor = Stream
-                    .of(clazz.getDeclaredConstructors())
-                    .filter(ctor -> ctor.getParameterCount() == 0).findFirst();
-            if (!defaultCtor.isPresent()) {
-                return;
-            }
-            defaultCtor.get().setAccessible(true);
-            setupThreadLocals();
-            Object instance;
-            try {
-                instance = defaultCtor.get().newInstance();
-            } finally {
-                resetThreadLocals();
-            }
+            Object instance = instantiate(clazz);
             serializeAndDeserialize(instance);
         } catch (Throwable e) {
             throw new AssertionError(clazz.getName(), e);
+        }
+    }
+
+    private void serializeAndDeserializeInsideContainer(Class<?> clazz) {
+        try {
+            if (DIV_CLASS == null || COMPONENT_CLASS == null) {
+                return;
+            }
+            if (!COMPONENT_CLASS.isAssignableFrom(clazz)) {
+                return;
+            }
+            if (UI_CLASS != null && UI_CLASS.isAssignableFrom(clazz)) {
+                return;
+            }
+            Object div = instantiate(DIV_CLASS);
+            Object instance = instantiate(clazz);
+            if (instance == null) {
+                return;
+            }
+
+            Object divElement = getElement(div);
+            Optional<Method> setChild = Stream
+                    .of(divElement.getClass().getMethods())
+                    .filter(method -> "setChild".equals(method.getName()))
+                    .findFirst();
+            setChild.get().invoke(divElement, 0, getElement(instance));
+            serializeAndDeserialize(div);
+        } catch (Throwable e) {
+            throw new AssertionError(clazz.getName(), e);
+        }
+    }
+
+    private Object getElement(Object obj) throws NoSuchMethodException,
+            SecurityException, IllegalAccessException, IllegalArgumentException,
+            InvocationTargetException {
+        Method method = obj.getClass().getMethod("getElement");
+        return method.invoke(obj);
+    }
+
+    private Object instantiate(Class<?> clazz) throws InstantiationException,
+            IllegalAccessException, InvocationTargetException {
+        Optional<Constructor<?>> defaultCtor = Stream
+                .of(clazz.getDeclaredConstructors())
+                .filter(ctor -> ctor.getParameterCount() == 0).findFirst();
+        if (!defaultCtor.isPresent()) {
+            return null;
+        }
+        defaultCtor.get().setAccessible(true);
+        setupThreadLocals();
+        try {
+            return defaultCtor.get().newInstance();
+        } finally {
+            resetThreadLocals();
         }
     }
 
@@ -477,6 +562,14 @@ public abstract class ClassesSerializableTest {
             }
         }
         return classes;
+    }
+
+    private Class<?> loadComponent(String fqn) {
+        try {
+            return Class.forName(fqn);
+        } catch (ClassNotFoundException e) {
+            return null;
+        }
     }
 
 }

@@ -25,6 +25,7 @@ import com.vaadin.flow.shared.Registration;
  * @param <T>
  *            the type of the component returned at the
  *            {@link FocusEvent#getSource()}
+ * @since 1.0
  */
 public interface FocusNotifier<T extends Component> extends Serializable {
 
@@ -53,7 +54,7 @@ public interface FocusNotifier<T extends Component> extends Serializable {
     }
 
     /**
-     * Class that represents the DOM event "focus".
+     * Represents the DOM event "focus".
      *
      * @param <C>
      *            The source component type.

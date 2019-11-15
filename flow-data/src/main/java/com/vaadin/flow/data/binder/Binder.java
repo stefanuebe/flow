@@ -38,8 +38,9 @@ import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
 import com.googlecode.gentyref.GenericTypeReflector;
-import com.vaadin.external.org.slf4j.Logger;
-import com.vaadin.external.org.slf4j.LoggerFactory;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
 import com.vaadin.flow.component.Component;
 import com.vaadin.flow.component.HasText;
 import com.vaadin.flow.component.HasValidation;
@@ -565,9 +566,11 @@ public class Binder<BEAN> implements Serializable {
                 TARGET nullRepresentation) {
             return withConverter(
                     fieldValue -> Objects.equals(fieldValue, nullRepresentation)
-                            ? null : fieldValue,
+                            ? null
+                            : fieldValue,
                     modelValue -> Objects.isNull(modelValue)
-                            ? nullRepresentation : modelValue);
+                            ? nullRepresentation
+                            : modelValue);
         }
 
         /**
@@ -981,7 +984,7 @@ public class Binder<BEAN> implements Serializable {
 
         private boolean readOnly;
 
-        private final Registration onValueChange;
+        private Registration onValueChange;
         private boolean valueInit = false;
 
         /**
@@ -1044,15 +1047,21 @@ public class Binder<BEAN> implements Serializable {
 
         /**
          * Removes this binding from its binder and unregisters the
-         * {@code ValueChangeListener} from any bound {@code HasValue}.
+         * {@code ValueChangeListener} from any bound {@code HasValue}. It does
+         * nothing if it is called for an already unbound binding.
          */
         @Override
         public void unbind() {
             if (onValueChange != null) {
                 onValueChange.remove();
+                onValueChange = null;
             }
-            binder.removeBindingInternal(this);
-            binder = null;
+
+            if (binder != null) {
+                binder.removeBindingInternal(this);
+                binder = null;
+            }
+
             field = null;
         }
 
@@ -1121,7 +1130,7 @@ public class Binder<BEAN> implements Serializable {
             valueInit = true;
             try {
                 TARGET originalValue = getter.apply(bean);
-                field.setValue(convertToFieldType(originalValue));
+                convertAndSetFieldValue(originalValue);
 
                 if (writeBackChangedValues && setter != null) {
                     doConversion().ifOk(convertedValue -> {
@@ -1194,7 +1203,31 @@ public class Binder<BEAN> implements Serializable {
 
         @Override
         public void read(BEAN bean) {
-            field.setValue(convertToFieldType(getter.apply(bean)));
+            convertAndSetFieldValue(getter.apply(bean));
+        }
+
+        private void convertAndSetFieldValue(TARGET modelValue) {
+            FIELDVALUE convertedValue = convertToFieldType(modelValue);
+            try {
+                field.setValue(convertedValue);
+            } catch (RuntimeException e) {
+                /*
+                 * Add an additional hint to the exception for the typical case
+                 * with a field that doesn't accept null values. The non-null
+                 * empty value is used as a heuristic to determine that the
+                 * field doesn't accept null rather than throwing for some other
+                 * reason.
+                 */
+                if (convertedValue == null && field.getEmptyValue() != null) {
+                    throw new IllegalStateException(String.format(
+                            "A field of type %s didn't accept a null value."
+                                    + " If null values are expected, then configure a null representation for the binding.",
+                            field.getClass().getName()), e);
+                } else {
+                    // Otherwise, let the original exception speak for itself
+                    throw e;
+                }
+            }
         }
 
         @Override
@@ -1684,8 +1717,17 @@ public class Binder<BEAN> implements Serializable {
             clearFields();
         } else {
             changedBindings.clear();
-            getBindings()
-                    .forEach(binding -> binding.initFieldValue(bean, false));
+            getBindings().forEach(binding -> {
+                /*
+                 * Some bindings may have been removed from binder during
+                 * readBean. We should skip those bindings to avoid NPE inside
+                 * initFieldValue. It happens e.g. when we unbind a binding in
+                 * valueChangeListener of another field.
+                 */
+                if (binding.getField() != null) {
+                    binding.initFieldValue(bean, false);
+                }
+            });
             getValidationStatusHandler().statusChange(
                     BinderValidationStatus.createUnresolvedStatus(this));
             fireStatusChangeEvent(false);
@@ -2463,7 +2505,8 @@ public class Binder<BEAN> implements Serializable {
         Converter<FIELDVALUE, FIELDVALUE> nullRepresentationConverter = Converter
                 .from(fieldValue -> fieldValue,
                         modelValue -> Objects.isNull(modelValue)
-                                ? field.getEmptyValue() : modelValue,
+                                ? field.getEmptyValue()
+                                : modelValue,
                         Throwable::getMessage);
         ConverterDelegate<FIELDVALUE> converter = new ConverterDelegate<>(
                 nullRepresentationConverter);
@@ -2842,6 +2885,7 @@ public class Binder<BEAN> implements Serializable {
         if (bindings.remove(binding)) {
             boundProperties.entrySet()
                     .removeIf(entry -> entry.getValue().equals(binding));
+            changedBindings.remove(binding);
         }
     }
 
